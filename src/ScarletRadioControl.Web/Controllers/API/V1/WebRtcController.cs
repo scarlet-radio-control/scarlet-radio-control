@@ -81,11 +81,13 @@ public class WebRtcController : ControllerBase
 		return this.Ok(rtcConfiguration);
 	}
 
-	public record RTCConfiguration {
+	public record RTCConfiguration
+	{
 		public required ICollection<RTCIceServer>? IceServers { get; init; }
 	}
 
-	public record RTCIceServer {
+	public record RTCIceServer
+	{
 		public required string? Credential { get; init; }
 		public required ICollection<string>? Urls { get; init; }
 		public required string? Username { get; init; }

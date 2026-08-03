@@ -18,7 +18,7 @@ public class WhepController : ControllerBase
 	[ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest, MediaTypeNames.Application.ProblemJson)]
 	public async Task<IActionResult> EndpointAsync([FromBody] string sdpOffer, CancellationToken cancellationToken)
 	{
-		if (string.IsNullOrWhiteSpace(sdpOffer)){return this.Problem(statusCode: StatusCodes.Status400BadRequest, title: "The SDP offer cannot be empty."); }
+		if (string.IsNullOrWhiteSpace(sdpOffer)) { return this.Problem(statusCode: StatusCodes.Status400BadRequest, title: "The SDP offer cannot be empty."); }
 
 		var rtcSessionDescription = new RTCSessionDescription
 		{

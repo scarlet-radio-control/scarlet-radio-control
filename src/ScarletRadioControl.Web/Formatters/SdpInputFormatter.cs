@@ -20,7 +20,7 @@ public sealed class SdpInputFormatter : TextInputFormatter
 
 	public override async Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
 	{
-		using var streamReader = new StreamReader(context.HttpContext.Request.Body,encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+		using var streamReader = new StreamReader(context.HttpContext.Request.Body, encoding, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
 		var sdp = await streamReader.ReadToEndAsync(context.HttpContext.RequestAborted);
 		return await InputFormatterResult.SuccessAsync(sdp);
 	}
