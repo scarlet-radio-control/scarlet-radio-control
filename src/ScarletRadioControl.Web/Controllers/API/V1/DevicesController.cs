@@ -10,7 +10,7 @@ namespace ScarletRadioControl.Web.Controllers.API.V1;
 [ApiController]
 [ApiExplorerSettings(GroupName = "v1")]
 [Route("/api/v1/devices")]
-public class DevicesController : ControllerBase
+public partial class DevicesController : ControllerBase
 {
 
 	[HttpGet]
@@ -30,6 +30,12 @@ public class DevicesController : ControllerBase
 	{
 		public required string Id { get; init; } /* SHOULD BE A GUID */
 		public required string Name { get; init; }
+	}
+
+	public record RTCSessionDescription
+	{
+		public required string Sdp { get; init; }
+		public required string Type { get; init; } /* "offer" or "answer" */
 	}
 
 }
