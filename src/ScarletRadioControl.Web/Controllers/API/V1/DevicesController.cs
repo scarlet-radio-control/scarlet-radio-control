@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ScarletRadioControl.Web.Controllers.API.V1;
 
-
 [ApiController]
 [ApiExplorerSettings(GroupName = "v1")]
 [Route("/api/v1/devices")]
