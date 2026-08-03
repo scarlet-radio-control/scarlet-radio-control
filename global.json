@@ -1,13 +1,13 @@
 {
-	"$schema": "https://json.schemastore.org/global",
-	"msbuild-sdks": {
-		"Microsoft.VisualStudio.JavaScript.Sdk": "1.0.6098695"
-	},
-	"sdk": {
-		"rollForward": "latestMajor",
-		"version": "10.0.302"
-	},
-	"test": {
-		"runner": "Microsoft.Testing.Platform"
-	}
+  "$schema": "https://json.schemastore.org/global",
+  "msbuild-sdks": {
+    "Microsoft.VisualStudio.JavaScript.Sdk": "1.0.6237341"
+  },
+  "sdk": {
+    "rollForward": "latestMajor",
+    "version": "10.0.302"
+  },
+  "test": {
+    "runner": "Microsoft.Testing.Platform"
+  }
 }
