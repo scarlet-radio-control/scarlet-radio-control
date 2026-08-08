@@ -12,7 +12,7 @@
 		<RepositoryUrl>https://github.com/scarlet-radio-control/scarlet-radio-control-web.git</RepositoryUrl>
 		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 		<UseArtifactsOutput>true</UseArtifactsOutput>
-		<Version>2026.05.11.0</Version>
+		<Version>2026.08.08.0</Version>
 		<WarningLevel>7</WarningLevel>
 	</PropertyGroup>
 

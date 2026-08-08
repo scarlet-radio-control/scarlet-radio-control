@@ -3,9 +3,13 @@
 	<head>
 		<meta charset="UTF-8" />
 		<link href="/favicon.png" rel="icon" type="image/png" />
+		<link href="/manifest.webmanifest" rel="manifest" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>ScarletRadioControl.Web.Frontend</title>
 		<script src="/src/main.tsx" type="module"></script>
+		<script defer>
+			navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
+		</script>
 	</head>
 	<body id="root">
 	</body>
