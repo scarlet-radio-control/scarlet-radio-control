@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using ScarletRadioControl.Web.Formatters;
 using ScarletRadioControl.Web.Hubs;
 
 namespace ScarletRadioControl.Web;
@@ -47,10 +46,7 @@ public class Startup(
 	public void ConfigureServices(IServiceCollection serviceCollection)
 	{
 		serviceCollection
-			.AddControllers(mvcOptions =>
-			{
-				mvcOptions.InputFormatters.Insert(0, new SdpInputFormatter());
-			})
+			.AddControllers()
 			.AddJsonOptions(jsonOptions =>
 			{
 				jsonOptions.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());

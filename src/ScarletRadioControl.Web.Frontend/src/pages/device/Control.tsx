@@ -148,7 +148,7 @@ export default function Control() {
 
 		if (rtcPeerConnection.connectionState !== "new") { return; }
 
-		hubConnection.invoke("JoinAsClient", deviceId)
+		hubConnection.invoke("JoinAsClient", deviceId, null)
 			.catch((reason) => {
 				console.error(reason);
 				setStatus("error");
