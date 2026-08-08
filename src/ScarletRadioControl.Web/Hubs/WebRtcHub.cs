@@ -17,7 +17,7 @@ public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 		await this.Clients.OthersInGroup(deviceId).ClientJoined(this.Context.ConnectionId);
 	}
 
-	public async Task JoinAsDevice(string deviceId)
+	public async Task JoinAsDevice(string deviceId, RtcSessionDescriptionInit rtcSessionDescriptionInit)
 	{
 		await this.Groups.AddToGroupAsync(this.Context.ConnectionId, deviceId);
 		await this.Clients.OthersInGroup(deviceId).DeviceJoined(this.Context.ConnectionId);
@@ -51,6 +51,11 @@ public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 		Task ReceiveAnswer(string fromConnectionId, object rtcSessionDescriptionInit);
 
 		Task ReceiveIceCandidate(string fromConnectionId, object rtcIceCandidate);
+	}
+
+	public record RtcSessionDescriptionInit {
+		public required string Sdp { get; init; }
+		public required string Type { get; init; }
 	}
 
 }
