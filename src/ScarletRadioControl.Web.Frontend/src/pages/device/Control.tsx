@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import useApiClient from "../../hooks/useApiClient";
 import { useSignalRContext } from "../../contexts/SignalRContext";
+import useEffectAsync from "../../hooks/useEffectAsync";
 
 interface RTCWellKnownStats {
 	localCandidateType?: string;
@@ -11,44 +11,16 @@ interface RTCWellKnownStats {
 type Status = "unknown" | "rtc-connection-loaded" | "hub-connection-or-rtc-peer-connection-loaded" | "answer-sent" | "connected" | "error";
 
 export default function Control() {
-	const apiClient = useApiClient();
 	const { deviceId } = useParams<{ deviceId: string }>();
 	const { connected, hubConnection }= useSignalRContext();
 
-	const [rtcConfigurationStatus, setRtcConfigurationStatus] = useState<"disconnected" | "connected">("disconnected");
-
-	const [rtcConfiguration, setRtcConfiguration] = useState<RTCConfiguration | undefined>(undefined);
 	const [status, setStatus] = useState<Status>("unknown");
 	const [rtcWellKnownStats, setRtcWellKnownStats] = useState<RTCWellKnownStats | undefined>(undefined);
 
 	const htmlVideoElementRefObject = useRef<HTMLVideoElement>(null);
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
-	const [rtcPeerConnection, setRtcPeerConnection] = useState<RTCPeerConnection | undefined>(undefined);
-
-	useEffect(() => {
-		const newRtcPeerConnection = new RTCPeerConnection(rtcConfiguration ?? undefined);
-		setRtcPeerConnection(newRtcPeerConnection);
-
-		return () => {
-			newRtcPeerConnection.close();
-			setRtcPeerConnection(undefined);
-		};
-	}, [rtcConfiguration]);
-
-	useEffect(() => {
-		apiClient.api.v1.webRtc.rtcConfiguration.get()
-			.then((response) => {
-				setRtcConfiguration(response as RTCConfiguration);
-				setRtcConfigurationStatus("connected");
-			}
-		).catch((reason) => {
-			console.error(reason);
-			setRtcConfigurationStatus("disconnected");
-		});
-
-		return () => {};
-	}, [apiClient]);
+	const [rtcPeerConnection, _] = useState<RTCPeerConnection>(new RTCPeerConnection());
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection || !rtcPeerConnection) { return; }
@@ -152,23 +124,16 @@ export default function Control() {
 		return () => {};
 	}, [connected, deviceId, hubConnection, rtcPeerConnection]);
 
-	useEffect(() => {
-		if (!connected || !deviceId || !hubConnection || !rtcPeerConnection) { return; }
+	useEffectAsync(async () => {
+		if (!connected || !deviceId || !hubConnection) { return; }
 
-		if (rtcPeerConnection.connectionState !== "new") { return; }
-
-		hubConnection.invoke("JoinAsClient", deviceId, null)
-			.catch((reason) => {
-				console.error(reason);
-				setStatus("error");
-			});
-
-		return () => { };
+		const rtcIceServers = await hubConnection.invoke("JoinAsClient", deviceId, null) as RTCIceServer[];
+		rtcPeerConnection?.setConfiguration({ iceServers: rtcIceServers });
 	}, [connected, deviceId, hubConnection, rtcPeerConnection]);
 
 	return (
 		<div style={{ display: "flex", flex: 1, flexDirection: "column", width: "100%" }}>
-			<p style={{ margin: "auto 1rem" }}>Id: {deviceId} - Status: {status} - Rtc Configuration: {rtcConfigurationStatus} - Local Candidate Type: {rtcWellKnownStats?.localCandidateType} - Remote Candidate Type: {rtcWellKnownStats?.remoteCandidateType}</p>
+			<p style={{ margin: "auto 1rem" }}>Id: {deviceId} - Status: {status} - Local Candidate Type: {rtcWellKnownStats?.localCandidateType} - Remote Candidate Type: {rtcWellKnownStats?.remoteCandidateType}</p>
 			<video
 				autoPlay
 				muted
