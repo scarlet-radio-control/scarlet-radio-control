@@ -7,7 +7,7 @@ namespace ScarletRadioControl.Web.Hubs;
 public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 {
 
-	private readonly ICollection<RtcIceServer> RtcIceServers = new HashSet<RtcIceServer> {
+	private readonly ICollection<RtcIceServer> rtcIceServers = new HashSet<RtcIceServer> {
 		new RtcIceServer { Credential = null, Urls = new List<string> { "stun:stun.l.google.com:19302", }, Username = null, },
 		new RtcIceServer { Credential = null, Urls = new List<string> { "stun:stun.relay.metered.ca:80", }, Username = null, },
 		new RtcIceServer { Credential = "xkw2mfGQr0ZAODKl", Urls = new List<string> { "turn:global.relay.metered.ca:80", }, Username = "b6e796d3b6bc333d4bf58b84", },
@@ -27,10 +27,11 @@ public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 		await this.Clients.OthersInGroup(deviceId).ClientJoined(this.Context.ConnectionId);
 	}
 
-	public async Task JoinAsDevice(string deviceId, RtcSessionDescriptionInit rtcSessionDescriptionInit)
+	public async Task<ICollection<RtcIceServer>> JoinAsDevice(string deviceId, RtcSessionDescriptionInit rtcSessionDescriptionInit)
 	{
 		await this.Groups.AddToGroupAsync(this.Context.ConnectionId, deviceId);
 		await this.Clients.OthersInGroup(deviceId).DeviceJoined(this.Context.ConnectionId);
+		return this.rtcIceServers;
 	}
 
 	public async Task SendOffer(string deviceId, string targetConnectionId, object rtcSessionDescriptionInit)
