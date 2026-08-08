@@ -172,7 +172,7 @@ export default function ControlTest() {
 
 		ensureLocalTracks();
 
-		hubConnection.invoke("JoinAsDevice", deviceId)
+		hubConnection.invoke("JoinAsDevice", deviceId, null)
 			.catch((reason) => {
 				console.error(reason);
 				setStatus("error");

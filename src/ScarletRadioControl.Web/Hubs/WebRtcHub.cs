@@ -21,14 +21,14 @@ public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 		await this.Clients.OthersInGroup(deviceId).DeviceHeartbeated(this.Context.ConnectionId);
 	}
 
-	public async Task<ICollection<RtcIceServer>> JoinAsClient(string deviceId, RtcSessionDescriptionInit _)
+	public async Task<ICollection<RtcIceServer>> JoinAsClient(string deviceId, RtcSessionDescriptionInit? _)
 	{
 		await this.Groups.AddToGroupAsync(this.Context.ConnectionId, deviceId);
 		await this.Clients.OthersInGroup(deviceId).ClientJoined(this.Context.ConnectionId);
 		return this.rtcIceServers;
 	}
 
-	public async Task<ICollection<RtcIceServer>> JoinAsDevice(string deviceId, RtcSessionDescriptionInit _)
+	public async Task<ICollection<RtcIceServer>> JoinAsDevice(string deviceId, RtcSessionDescriptionInit? _)
 	{
 		await this.Groups.AddToGroupAsync(this.Context.ConnectionId, deviceId);
 		await this.Clients.OthersInGroup(deviceId).DeviceJoined(this.Context.ConnectionId);
