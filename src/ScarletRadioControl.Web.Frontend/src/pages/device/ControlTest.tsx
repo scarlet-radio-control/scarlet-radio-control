@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import countdown from "../../assets/countdown.mp4";
-import useApiClient from "../../hooks/useApiClient";
 import { useSignalRContext } from "../../contexts/SignalRContext";
+import useEffectAsync from "../../hooks/useEffectAsync";
 
 interface RTCWellKnownStats {
 	localCandidateType?: string;
@@ -12,14 +12,11 @@ interface RTCWellKnownStats {
 type Status = "unknown" | "rtc-connection-loaded" | "hub-connection-or-rtc-peer-connection-loaded" | "offer-sent" | "connected" | "error";
 
 export default function ControlTest() {
-	const apiClient = useApiClient();
 	const { deviceId } = useParams<{ deviceId: string }>();
-	const {connected, hubConnection}= useSignalRContext();
+	const { connected, hubConnection }= useSignalRContext();
 
 	const [heartbeatStatus, setHeartbeatStatus] = useState<"disconnected" | "connected">("disconnected");
-	const [rtcConfigurationStatus, setRtcConfigurationStatus] = useState<"disconnected" | "connected">("disconnected");
 
-	const [rtcConfiguration, setRtcConfiguration] = useState<RTCConfiguration | undefined>(undefined);
 	const [status, setStatus] = useState<Status>("unknown");
 	const [rtcWellKnownStats, setRtcWellKnownStats] = useState<RTCWellKnownStats | undefined>(undefined);
 
@@ -27,17 +24,7 @@ export default function ControlTest() {
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
 	const tracksAddedRefObject = useRef(false);
-	const [rtcPeerConnection, setRtcPeerConnection] = useState<RTCPeerConnection | undefined>(undefined);
-
-	useEffect(() => {
-		const newRtcPeerConnection = new RTCPeerConnection(rtcConfiguration ?? undefined);
-		setRtcPeerConnection(newRtcPeerConnection);
-
-		return () => {
-			newRtcPeerConnection.close();
-			setRtcPeerConnection(undefined);
-		};
-	}, [rtcConfiguration]);
+	const [rtcPeerConnection, _] = useState<RTCPeerConnection>(new RTCPeerConnection());
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection) { return; }
@@ -53,20 +40,6 @@ export default function ControlTest() {
 			setHeartbeatStatus("disconnected");
 		};
 	}, [connected, deviceId, hubConnection]);
-
-	useEffect(() => {
-		apiClient.api.v1.webRtc.rtcConfiguration.get()
-			.then((response) => {
-				setRtcConfiguration(response as RTCConfiguration);
-				setRtcConfigurationStatus("connected");
-			}
-		).catch((reason) => {
-			console.error(reason);
-			setRtcConfigurationStatus("disconnected");
-		});
-
-		return () => {};
-	}, [apiClient]);
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection || !rtcPeerConnection) { return; }
@@ -156,7 +129,7 @@ export default function ControlTest() {
 		return () => {};
 	}, [connected, deviceId, hubConnection, rtcPeerConnection]);
 
-	useEffect(() => {
+	useEffectAsync(async () => {
 		const htmlVideoElement = htmlVideoElementRefObject.current;
 
 		if (!connected || !deviceId || !htmlVideoElement || !hubConnection || !rtcPeerConnection) { return; }
@@ -181,18 +154,13 @@ export default function ControlTest() {
 
 		ensureLocalTracks();
 
-		hubConnection.invoke("JoinAsDevice", deviceId, null)
-			.catch((reason) => {
-				console.error(reason);
-				setStatus("error");
-			});
-
-		return () => { };
+		const rtcIceServers = await hubConnection.invoke("JoinAsDevice", deviceId, null) as RTCIceServer[];
+		rtcPeerConnection?.setConfiguration({ iceServers: rtcIceServers });
 	}, [connected, deviceId, hubConnection, rtcPeerConnection]);
 
 	return (
 		<div style={{ display: "flex", flex: 1, flexDirection: "column", width: "100%" }}>
-			<p style={{ margin: "auto 1rem" }}>Id: {deviceId} - Status: {status} - Heartbeat: {heartbeatStatus} - Rtc Configuration: {rtcConfigurationStatus} - Local Candidate Type: {rtcWellKnownStats?.localCandidateType} - Remote Candidate Type: {rtcWellKnownStats?.remoteCandidateType}</p>
+			<p style={{ margin: "auto 1rem" }}>Id: {deviceId} - Status: {status} - Heartbeat: {heartbeatStatus} - Local Candidate Type: {rtcWellKnownStats?.localCandidateType} - Remote Candidate Type: {rtcWellKnownStats?.remoteCandidateType}</p>
 			<video
 				autoPlay
 				loop
