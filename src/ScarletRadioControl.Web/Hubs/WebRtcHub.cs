@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
@@ -5,6 +6,15 @@ namespace ScarletRadioControl.Web.Hubs;
 
 public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 {
+
+	private readonly ICollection<RtcIceServer> RtcIceServers = new HashSet<RtcIceServer> {
+		new RtcIceServer { Credential = null, Urls = new List<string> { "stun:stun.l.google.com:19302", }, Username = null, },
+		new RtcIceServer { Credential = null, Urls = new List<string> { "stun:stun.relay.metered.ca:80", }, Username = null, },
+		new RtcIceServer { Credential = "xkw2mfGQr0ZAODKl", Urls = new List<string> { "turn:global.relay.metered.ca:80", }, Username = "b6e796d3b6bc333d4bf58b84", },
+		new RtcIceServer { Credential = "xkw2mfGQr0ZAODKl", Urls = new List<string> { "turn:global.relay.metered.ca:80?transport=tcp", }, Username = "b6e796d3b6bc333d4bf58b84", },
+		new RtcIceServer { Credential = "xkw2mfGQr0ZAODKl", Urls = new List<string> { "turn:global.relay.metered.ca:443", }, Username = "b6e796d3b6bc333d4bf58b84", },
+		new RtcIceServer { Credential = "xkw2mfGQr0ZAODKl", Urls = new List<string> { "turns:global.relay.metered.ca:443?transport=tcp", }, Username = "b6e796d3b6bc333d4bf58b84", },
+	};
 
 	public async Task DeviceHeartbeat(string deviceId)
 	{
@@ -53,7 +63,15 @@ public class WebRtcHub : Hub<WebRtcHub.IWebRtcClient>
 		Task ReceiveIceCandidate(string fromConnectionId, object rtcIceCandidate);
 	}
 
-	public record RtcSessionDescriptionInit {
+	public record RtcIceServer
+	{
+		public required string? Credential { get; init; }
+		public required ICollection<string>? Urls { get; init; }
+		public required string? Username { get; init; }
+	}
+
+	public record RtcSessionDescriptionInit
+	{
 		public required string Sdp { get; init; }
 		public required string Type { get; init; }
 	}
