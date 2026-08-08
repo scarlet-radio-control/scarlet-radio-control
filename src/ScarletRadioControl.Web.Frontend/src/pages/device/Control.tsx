@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import useApiClient from "../../hooks/useApiClient";
-import useRtcPeerConnection from "../../hooks/useRtcPeerConnection";
 import { useSignalRContext } from "../../contexts/SignalRContext";
 
 interface RTCWellKnownStats {
@@ -25,7 +24,17 @@ export default function Control() {
 	const htmlVideoElementRefObject = useRef<HTMLVideoElement>(null);
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
-	const rtcPeerConnection = useRtcPeerConnection(rtcConfiguration);
+	const [rtcPeerConnection, setRtcPeerConnection] = useState<RTCPeerConnection | undefined>(undefined);
+
+	useEffect(() => {
+		const newRtcPeerConnection = new RTCPeerConnection(rtcConfiguration ?? undefined);
+		setRtcPeerConnection(newRtcPeerConnection);
+
+		return () => {
+			newRtcPeerConnection.close();
+			setRtcPeerConnection(undefined);
+		};
+	}, [rtcConfiguration]);
 
 	useEffect(() => {
 		apiClient.api.v1.webRtc.rtcConfiguration.get()
