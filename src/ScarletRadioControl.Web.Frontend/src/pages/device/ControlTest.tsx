@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import countdown from "../../assets/countdown.mp4";
 import useApiClient from "../../hooks/useApiClient";
-import useRtcPeerConnection from "../../hooks/useRtcPeerConnection";
 import { useSignalRContext } from "../../contexts/SignalRContext";
 
 interface RTCWellKnownStats {
@@ -28,7 +27,17 @@ export default function ControlTest() {
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
 	const tracksAddedRefObject = useRef(false);
-	const rtcPeerConnection = useRtcPeerConnection(rtcConfiguration);
+	const [rtcPeerConnection, setRtcPeerConnection] = useState<RTCPeerConnection | undefined>(undefined);
+
+	useEffect(() => {
+		const newRtcPeerConnection = new RTCPeerConnection(rtcConfiguration ?? undefined);
+		setRtcPeerConnection(newRtcPeerConnection);
+
+		return () => {
+			newRtcPeerConnection.close();
+			setRtcPeerConnection(undefined);
+		};
+	}, [rtcConfiguration]);
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection) { return; }
