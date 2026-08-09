@@ -11,7 +11,7 @@
 		"@eslint/js": "^10.0.1",
 		"@microsoft/kiota": "^1.34.1",
 		"@tailwindcss/vite": "^4.3.3",
-		"@types/node": "^26.1.1",
+		"@types/node": "^26.1.2",
 		"@types/react": "^19.2.18",
 		"@types/react-dom": "^19.2.4",
 		"@types/react-router-dom": "^5.3.3",
