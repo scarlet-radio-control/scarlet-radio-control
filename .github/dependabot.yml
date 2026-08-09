@@ -1,6 +1,5 @@
-version: 2
 updates:
-  - directory: "/"
+  - directory: "/src/ScarletRadioControl.Web.Frontend"
     package-ecosystem: "npm"
     schedule:
       interval: "weekly"
@@ -8,3 +7,4 @@ updates:
     package-ecosystem: "nuget"
     schedule:
       interval: "weekly"
+version: 2
