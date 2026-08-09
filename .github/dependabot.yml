@@ -3,11 +3,11 @@ updates:
     package-ecosystem: "nuget"
     schedule:
       interval: "weekly"
-  - directory: "/"
+  - directory: "/.github/workflows"
     package-ecosystem: "github-actions"
     schedule:
       interval: "weekly"
-  - directory: "/src/ScarletRadioControl.Web.Frontend/"
+  - directory: "/src/ScarletRadioControl.Web.Frontend"
     package-ecosystem: "npm"
     schedule:
       interval: "weekly"
