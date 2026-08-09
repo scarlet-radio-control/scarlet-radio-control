@@ -21,7 +21,7 @@ export default function Control() {
 	const htmlVideoElementRefObject = useRef<HTMLVideoElement>(null);
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
-	const rtcPeerConnection = useRtcPeerConnection();
+	const { rtcPeerConnection } = useRtcPeerConnection();
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection || !rtcPeerConnection) { return; }
