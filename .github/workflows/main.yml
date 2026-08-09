@@ -1,6 +1,6 @@
 jobs:
   build:
-    runs-on: "ubuntu-24.04"
+    runs-on: "ubuntu-26.04"
     steps:
       - uses: "actions/checkout@v7"
       - uses: "actions/setup-dotnet@v6"
@@ -21,7 +21,7 @@ jobs:
   deploy:
     if: "github.ref == 'refs/heads/tfm'"
     needs: "build"
-    runs-on: "ubuntu-24.04"
+    runs-on: "ubuntu-26.04"
     steps:
       - uses: "actions/download-artifact@v8"     
         with:
@@ -34,6 +34,6 @@ jobs:
 name: "main"
 on:
   pull_request:
-    branches: [ "main", "release" ]
+    branches: [ "main", "release", "tfm" ]
   push:
-    branches: [ "main", "release" ]
+    branches: [ "main", "release", "tfm" ]
