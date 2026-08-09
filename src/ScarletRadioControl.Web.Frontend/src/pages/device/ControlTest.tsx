@@ -25,7 +25,7 @@ export default function ControlTest() {
 	const rtcIceCandidateInitsRefObject = useRef<RTCIceCandidateInit[]>([]);
 	const remotePeerConnectionIdRefObject = useRef<string | null>(null);
 	const tracksAddedRefObject = useRef(false);
-	const rtcPeerConnection = useRtcPeerConnection();
+	const { rtcPeerConnection } = useRtcPeerConnection();
 
 	useEffect(() => {
 		if (!connected || !deviceId || !hubConnection) { return; }
