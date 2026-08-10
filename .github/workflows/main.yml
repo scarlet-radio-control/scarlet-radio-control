@@ -17,14 +17,21 @@ jobs:
       - uses: "actions/upload-artifact@v7"
         with:
           if-no-files-found: "error"
-          path: "./artifacts/publish/ScarletRadioControl.Web/release/" 
+          name: "ScarletRadioControl.Device"
+          path: "./artifacts/publish/ScarletRadioControl.Device/release/"
+      - uses: "actions/upload-artifact@v7"
+        with:
+          if-no-files-found: "error"
+          name: "ScarletRadioControl.Web"
+          path: "./artifacts/publish/ScarletRadioControl.Web/release/"
   deploy:
     if: "github.ref == 'refs/heads/tfm'"
     needs: "build"
     runs-on: "ubuntu-26.04"
     steps:
-      - uses: "actions/download-artifact@v8"     
+      - uses: "actions/download-artifact@v8"
         with:
+          name: "ScarletRadioControl.Web"
           path: "artifact"
       - uses: "azure/webapps-deploy@v3"    
         with:
