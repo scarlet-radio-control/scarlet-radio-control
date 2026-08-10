@@ -6,7 +6,8 @@ namespace ScarletRadioControl.Device;
 public static class Startup
 {
 
-	public static void ConfigureServices(IServiceCollection serviceCollection){
+	public static void ConfigureServices(IServiceCollection serviceCollection)
+	{
 		serviceCollection.AddHostedService<WorkerBackgroundService>();
 	}
 
