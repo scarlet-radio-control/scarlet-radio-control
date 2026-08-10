@@ -1,0 +1,12 @@
+{
+	"$schema": "https://www.schemastore.org/launchsettings.json",
+	"profiles": {
+		"ScarletRadioControl.Device": {
+			"commandName": "Project",
+			"dotnetRunMessages": true,
+			"environmentVariables": {
+				"DOTNET_ENVIRONMENT": "Development"
+			}
+		}
+	}
+}
