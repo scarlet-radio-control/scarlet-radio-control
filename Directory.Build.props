@@ -3,16 +3,16 @@
 	<PropertyGroup>
 		<ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
 		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-		<LangVersion>13</LangVersion>
+		<LangVersion>15.0</LangVersion>
 		<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
 		<NoWarn>CS0612;NU1903</NoWarn>
 		<Nullable>annotations</Nullable>
 		<PublishRepositoryUrl>true</PublishRepositoryUrl>
 		<RepositoryType>git</RepositoryType>
-		<RepositoryUrl>https://github.com/scarlet-radio-control/scarlet-radio-control-web.git</RepositoryUrl>
+		<RepositoryUrl>https://github.com/scarlet-radio-control/scarlet-radio-control.git</RepositoryUrl>
 		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 		<UseArtifactsOutput>true</UseArtifactsOutput>
-		<Version>2026.08.08.0</Version>
+		<Version>2026.08.10.0</Version>
 		<WarningLevel>7</WarningLevel>
 	</PropertyGroup>
 
