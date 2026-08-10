@@ -16,6 +16,7 @@
   </Folder>
   <Folder Name="/src/">
     <File Path="src/Directory.Build.props" />
+    <Project Path="src/ScarletRadioControl.Device/ScarletRadioControl.Device.csproj" />
     <Project Path="src/ScarletRadioControl.Web.Frontend/ScarletRadioControl.Web.Frontend.esproj">
       <Build />
       <Deploy />

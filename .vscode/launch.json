@@ -1,0 +1,13 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "configurations": [
+        {
+            "launchConfigurationId": "TargetFramework=;ScarletRadioControl.Device",
+            "name": "C#: ScarletRadioControl.Device",
+            "projectPath": "${workspaceFolder}\\src\\ScarletRadioControl.Device\\ScarletRadioControl.Device.csproj",
+            "request": "launch",
+            "type": "dotnet"
+       }
+    ],
+    "version": "0.2.0"
+}
