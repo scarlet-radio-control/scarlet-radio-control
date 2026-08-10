@@ -3,7 +3,6 @@
 	<PropertyGroup>
 		<ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
 		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-		<LangVersion>15.0</LangVersion>
 		<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
 		<NoWarn>CS0612;NU1903</NoWarn>
 		<Nullable>annotations</Nullable>
