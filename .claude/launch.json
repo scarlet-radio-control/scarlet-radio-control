@@ -1,0 +1,12 @@
+{
+	"version": "0.0.1",
+	"configurations": [
+		{
+			"name": "web",
+			"runtimeExecutable": "dotnet",
+			"runtimeArgs": ["run", "--project", "src/ScarletRadioControl.Web"],
+			"port": 7001,
+			"url": "https://web.scarlet-radio-control.dev.localhost:7001"
+		}
+	]
+}
