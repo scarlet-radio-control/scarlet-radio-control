@@ -5,14 +5,20 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ScarletRadioControl.Device.Signaling;
-using ScarletRadioControl.Device.Video;
+using ScarletRadioControl.Device.WebRtc;
 using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
 
-namespace ScarletRadioControl.Device.WebRtc;
+namespace ScarletRadioControl.Device.Services;
 
-public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<WebRtcSessionManager> logger)
+public class WebRtcSessionManager(
+	CameraVideoSource cameraVideoSource,
+	ILogger<WebRtcSessionManager> logger
+)
 {
+
+	private readonly CameraVideoSource cameraVideoSource = cameraVideoSource;
+	private readonly ILogger<WebRtcSessionManager> logger = logger;
 
 	// SIPSorcery only supports up to 10 ice servers per connection.
 	private const int MaximumIceServers = 10;
@@ -43,7 +49,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 
 				if (url.StartsWith("turns:", StringComparison.OrdinalIgnoreCase))
 				{
-					logger.LogWarning("Skipping ice server url {Url}, TURN over TCP/TLS is not supported", url);
+					this.logger.LogWarning("Skipping ice server url {Url}, TURN over TCP/TLS is not supported", url);
 					continue;
 				}
 
@@ -59,14 +65,14 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 		}
 
 		this.rtcIceServers = mappedRtcIceServers;
-		logger.LogInformation("Configured {IceServerCount} ice servers", mappedRtcIceServers.Count);
+		this.logger.LogInformation("Configured {IceServerCount} ice servers", mappedRtcIceServers.Count);
 	}
 
 	public async Task<RtcSessionDescriptionInit> CreateOfferAsync(string clientConnectionId)
 	{
 		this.ClosePeer(clientConnectionId);
 
-		cameraVideoSource.EnsureInitialised();
+		this.cameraVideoSource.EnsureInitialised();
 
 		var rtcPeerConnection = new RTCPeerConnection(new RTCConfiguration { iceServers = this.rtcIceServers });
 		var webRtcPeerSession = new WebRtcPeerSession(clientConnectionId, rtcPeerConnection);
@@ -81,12 +87,12 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 		};
 		foreach (var rtcDataChannel in rtcDataChannels)
 		{
-			rtcDataChannel.onopen += () => logger.LogDebug("Data channel {Label} opened for client {ClientConnectionId}", rtcDataChannel.label, clientConnectionId);
+			rtcDataChannel.onopen += () => this.logger.LogDebug("Data channel {Label} opened for client {ClientConnectionId}", rtcDataChannel.label, clientConnectionId);
 		}
 
-		rtcPeerConnection.addTrack(new MediaStreamTrack(cameraVideoSource.GetVideoSourceFormats(), MediaStreamStatusEnum.SendOnly));
+		rtcPeerConnection.addTrack(new MediaStreamTrack(this.cameraVideoSource.GetVideoSourceFormats(), MediaStreamStatusEnum.SendOnly));
 
-		rtcPeerConnection.OnVideoFormatsNegotiated += videoFormats => cameraVideoSource.SetVideoSourceFormat(videoFormats.First());
+		rtcPeerConnection.OnVideoFormatsNegotiated += videoFormats => this.cameraVideoSource.SetVideoSourceFormat(videoFormats.First());
 
 		rtcPeerConnection.onicecandidate += rtcIceCandidate =>
 		{
@@ -106,7 +112,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 
 		rtcPeerConnection.onconnectionstatechange += rtcPeerConnectionState =>
 		{
-			logger.LogInformation("Peer connection state changed for client {ClientConnectionId}: {RtcPeerConnectionState}", clientConnectionId, rtcPeerConnectionState);
+			this.logger.LogInformation("Peer connection state changed for client {ClientConnectionId}: {RtcPeerConnectionState}", clientConnectionId, rtcPeerConnectionState);
 			switch (rtcPeerConnectionState)
 			{
 				case RTCPeerConnectionState.connected:
@@ -127,7 +133,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 		var rtcSessionDescriptionInit = rtcPeerConnection.createOffer();
 		await rtcPeerConnection.setLocalDescription(rtcSessionDescriptionInit);
 
-		logger.LogInformation("Created offer for client {ClientConnectionId}", clientConnectionId);
+		this.logger.LogInformation("Created offer for client {ClientConnectionId}", clientConnectionId);
 		return new RtcSessionDescriptionInit { Sdp = rtcSessionDescriptionInit.sdp, Type = "offer" };
 	}
 
@@ -135,7 +141,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 	{
 		if (!this.webRtcPeerSessions.TryGetValue(clientConnectionId, out var webRtcPeerSession))
 		{
-			logger.LogWarning("Received an answer for unknown client {ClientConnectionId}", clientConnectionId);
+			this.logger.LogWarning("Received an answer for unknown client {ClientConnectionId}", clientConnectionId);
 			return;
 		}
 
@@ -154,12 +160,12 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 
 		if (setDescriptionResult != SetDescriptionResultEnum.OK)
 		{
-			logger.LogError("Failed to apply the answer for client {ClientConnectionId}: {SetDescriptionResult}", clientConnectionId, setDescriptionResult);
+			this.logger.LogError("Failed to apply the answer for client {ClientConnectionId}: {SetDescriptionResult}", clientConnectionId, setDescriptionResult);
 			this.ClosePeer(clientConnectionId);
 			return;
 		}
 
-		logger.LogInformation("Applied answer for client {ClientConnectionId}", clientConnectionId);
+		this.logger.LogInformation("Applied answer for client {ClientConnectionId}", clientConnectionId);
 
 		foreach (var pendingRtcIceCandidateInit in pendingRtcIceCandidateInits)
 		{
@@ -177,7 +183,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 
 		if (!this.webRtcPeerSessions.TryGetValue(clientConnectionId, out var webRtcPeerSession))
 		{
-			logger.LogWarning("Received an ice candidate for unknown client {ClientConnectionId}", clientConnectionId);
+			this.logger.LogWarning("Received an ice candidate for unknown client {ClientConnectionId}", clientConnectionId);
 			return;
 		}
 
@@ -218,10 +224,10 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 		}
 		catch (Exception exception)
 		{
-			logger.LogWarning(exception, "Failed to close the peer connection for client {ClientConnectionId}", clientConnectionId);
+			this.logger.LogWarning(exception, "Failed to close the peer connection for client {ClientConnectionId}", clientConnectionId);
 		}
 
-		logger.LogInformation("Closed peer session for client {ClientConnectionId}", clientConnectionId);
+		this.logger.LogInformation("Closed peer session for client {ClientConnectionId}", clientConnectionId);
 	}
 
 	public void CloseAll()
@@ -248,12 +254,12 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 				webRtcPeerSession.EncodedSampleDelegate = encodedSampleDelegate;
 			}
 
-			await cameraVideoSource.AddConsumerAsync(encodedSampleDelegate);
-			cameraVideoSource.ForceKeyFrame();
+			await this.cameraVideoSource.AddConsumerAsync(encodedSampleDelegate);
+			this.cameraVideoSource.ForceKeyFrame();
 		}
 		catch (Exception exception)
 		{
-			logger.LogError(exception, "Failed to attach video for client {ClientConnectionId}", webRtcPeerSession.ClientConnectionId);
+			this.logger.LogError(exception, "Failed to attach video for client {ClientConnectionId}", webRtcPeerSession.ClientConnectionId);
 		}
 	}
 
@@ -261,11 +267,11 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 	{
 		try
 		{
-			await cameraVideoSource.RemoveConsumerAsync(encodedSampleDelegate);
+			await this.cameraVideoSource.RemoveConsumerAsync(encodedSampleDelegate);
 		}
 		catch (Exception exception)
 		{
-			logger.LogWarning(exception, "Failed to detach video");
+			this.logger.LogWarning(exception, "Failed to detach video");
 		}
 	}
 
@@ -284,7 +290,7 @@ public class WebRtcSessionManager(CameraVideoSource cameraVideoSource, ILogger<W
 		}
 		catch (Exception exception)
 		{
-			logger.LogWarning(exception, "Failed to add an ice candidate for client {ClientConnectionId}", webRtcPeerSession.ClientConnectionId);
+			this.logger.LogWarning(exception, "Failed to add an ice candidate for client {ClientConnectionId}", webRtcPeerSession.ClientConnectionId);
 		}
 	}
 
