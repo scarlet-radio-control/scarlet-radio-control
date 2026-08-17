@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ScarletRadioControl.Device.Options;
-using ScarletRadioControl.Device.Services;
 
 namespace ScarletRadioControl.Device;
 
@@ -17,7 +16,7 @@ public static class Startup
 		serviceCollection
 			.AddSingleton<Services.CameraVideoSource>();
 		serviceCollection
-			.AddSingleton<WebRtcSessionManager>();
+			.AddSingleton<Services.WebRtcSessionManager>();
 	}
 
 }
