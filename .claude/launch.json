@@ -1,12 +1,13 @@
 {
-	"version": "0.0.1",
+	"$schema": "https://www.schemastore.org/claude-code-launch.json",
 	"configurations": [
 		{
 			"name": "web",
-			"runtimeExecutable": "dotnet",
-			"runtimeArgs": ["run", "--project", "src/ScarletRadioControl.Web"],
 			"port": 7001,
+			"runtimeArgs": [ "run", "--project", "src/ScarletRadioControl.Web" ],
+			"runtimeExecutable": "dotnet",
 			"url": "https://web.scarlet-radio-control.dev.localhost:7001"
 		}
-	]
+	],
+	"version": "0.0.1"
 }

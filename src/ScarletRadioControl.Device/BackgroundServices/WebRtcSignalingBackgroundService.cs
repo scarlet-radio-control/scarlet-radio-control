@@ -12,12 +12,20 @@ using ScarletRadioControl.Device.WebRtc;
 
 namespace ScarletRadioControl.Device.BackgroundServices;
 
-public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOptions, WebRtcSessionManager webRtcSessionManager, ILogger<WebRtcSignalingBackgroundService> logger) : BackgroundService
+public class WebRtcSignalingBackgroundService(
+	IOptions<DeviceOptions> deviceOptions,
+	ILogger<WebRtcSignalingBackgroundService> logger,
+	WebRtcSessionManager webRtcSessionManager
+) : BackgroundService
 {
+
+	private readonly IOptions<DeviceOptions> deviceOptions = deviceOptions;
+	private readonly ILogger<WebRtcSignalingBackgroundService> logger = logger;
+	private readonly WebRtcSessionManager webRtcSessionManager = webRtcSessionManager;
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 	{
-		var deviceOptionsValue = deviceOptions.Value;
+		var deviceOptionsValue = this.deviceOptions.Value;
 		var deviceId = deviceOptionsValue.DeviceId;
 		var hubUrl = deviceOptionsValue.HubUrl;
 
@@ -28,23 +36,23 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 
 		hubConnection.On<string>("ClientJoined", async clientConnectionId =>
 		{
-			logger.LogInformation("Client {ClientConnectionId} joined", clientConnectionId);
+			this.logger.LogInformation("Client {ClientConnectionId} joined", clientConnectionId);
 			try
 			{
-				var rtcSessionDescriptionInit = await webRtcSessionManager.CreateOfferAsync(clientConnectionId);
+				var rtcSessionDescriptionInit = await this.webRtcSessionManager.CreateOfferAsync(clientConnectionId);
 				await hubConnection.InvokeAsync("SendOffer", deviceId, clientConnectionId, rtcSessionDescriptionInit, stoppingToken);
 			}
 			catch (Exception exception)
 			{
-				logger.LogError(exception, "Failed to create or send an offer for client {ClientConnectionId}", clientConnectionId);
+				this.logger.LogError(exception, "Failed to create or send an offer for client {ClientConnectionId}", clientConnectionId);
 			}
 		});
 
-		hubConnection.On<string, RtcSessionDescriptionInit>("ReceiveAnswer", (clientConnectionId, rtcSessionDescriptionInit) => webRtcSessionManager.ApplyAnswer(clientConnectionId, rtcSessionDescriptionInit));
+		hubConnection.On<string, RtcSessionDescriptionInit>("ReceiveAnswer", (clientConnectionId, rtcSessionDescriptionInit) => this.webRtcSessionManager.ApplyAnswer(clientConnectionId, rtcSessionDescriptionInit));
 
-		hubConnection.On<string, RtcIceCandidateInit>("ReceiveIceCandidate", (clientConnectionId, rtcIceCandidateInit) => webRtcSessionManager.AddIceCandidate(clientConnectionId, rtcIceCandidateInit));
+		hubConnection.On<string, RtcIceCandidateInit>("ReceiveIceCandidate", (clientConnectionId, rtcIceCandidateInit) => this.webRtcSessionManager.AddIceCandidate(clientConnectionId, rtcIceCandidateInit));
 
-		webRtcSessionManager.OnIceCandidate += async (clientConnectionId, rtcIceCandidateInit) =>
+		this.webRtcSessionManager.OnIceCandidate += async (clientConnectionId, rtcIceCandidateInit) =>
 		{
 			if (hubConnection.State != HubConnectionState.Connected)
 			{
@@ -57,7 +65,7 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 			}
 			catch (Exception exception)
 			{
-				logger.LogWarning(exception, "Failed to send an ice candidate to client {ClientConnectionId}", clientConnectionId);
+				this.logger.LogWarning(exception, "Failed to send an ice candidate to client {ClientConnectionId}", clientConnectionId);
 			}
 		};
 
@@ -65,15 +73,15 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 		// Established peers keep streaming, the media is peer to peer.
 		hubConnection.Reconnected += async _ =>
 		{
-			logger.LogInformation("Reconnected to hub {HubUrl}, rejoining as device {DeviceId}", hubUrl, deviceId);
+			this.logger.LogInformation("Reconnected to hub {HubUrl}, rejoining as device {DeviceId}", hubUrl, deviceId);
 			try
 			{
 				var rtcIceServers = await hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, stoppingToken);
-				webRtcSessionManager.SetIceServers(rtcIceServers);
+				this.webRtcSessionManager.SetIceServers(rtcIceServers);
 			}
 			catch (Exception exception)
 			{
-				logger.LogError(exception, "Failed to rejoin as device {DeviceId}", deviceId);
+				this.logger.LogError(exception, "Failed to rejoin as device {DeviceId}", deviceId);
 			}
 		};
 
@@ -91,8 +99,8 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 						{
 							await hubConnection.StartAsync(stoppingToken);
 							var rtcIceServers = await hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, stoppingToken);
-							webRtcSessionManager.SetIceServers(rtcIceServers);
-							logger.LogInformation("Connected to hub {HubUrl} as device {DeviceId}", hubUrl, deviceId);
+							this.webRtcSessionManager.SetIceServers(rtcIceServers);
+							this.logger.LogInformation("Connected to hub {HubUrl} as device {DeviceId}", hubUrl, deviceId);
 						}
 						catch (OperationCanceledException)
 						{
@@ -100,7 +108,7 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 						}
 						catch (Exception exception)
 						{
-							logger.LogWarning(exception, "Failed to connect to hub {HubUrl}", hubUrl);
+							this.logger.LogWarning(exception, "Failed to connect to hub {HubUrl}", hubUrl);
 						}
 					}
 					disconnectedTickCount++;
@@ -121,7 +129,7 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 					}
 					catch (Exception exception)
 					{
-						logger.LogWarning(exception, "Failed to send the device heartbeat");
+						this.logger.LogWarning(exception, "Failed to send the device heartbeat");
 					}
 				}
 			}
@@ -132,7 +140,7 @@ public class WebRtcSignalingBackgroundService(IOptions<DeviceOptions> deviceOpti
 		}
 		finally
 		{
-			webRtcSessionManager.CloseAll();
+			this.webRtcSessionManager.CloseAll();
 			await hubConnection.DisposeAsync();
 		}
 	}
