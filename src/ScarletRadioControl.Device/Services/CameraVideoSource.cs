@@ -43,7 +43,7 @@ public class CameraVideoSource(
 
 			if (!this.ffmpegInitialised)
 			{
-				FFmpegInit.Initialise(ffmpegOptions.LogLevel, ffmpegOptions.LibraryPath, this.logger);
+				FFmpegInit.Initialise(ffmpegOptions.LogLevel, ffmpegOptions.GetLibraryPath(), this.logger);
 				this.ffmpegInitialised = true;
 			}
 
