@@ -28,6 +28,13 @@ public class CameraVideoSource(
 
 	private const int H264ClockRate = 90000;
 
+	// profile-level-id is not optional in practice: RFC 6184 says a receiver must imply baseline level 1.0
+	// when it is absent, and level 1.0 caps out at 99 macroblocks (176x144) and 64 kbps. A browser then
+	// configures its decoder for that and wedges on the first 1280x720 frame. 42e01f is constrained baseline
+	// level 3.1, whose limits (3600 macroblocks, 108000 macroblocks/s) are exactly 720p30, and it is the
+	// profile every browser accepts. level-asymmetry-allowed lets the encoder's own level_idc differ.
+	private const string H264FormatParameters = "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1";
+
 	private const int IdrSliceNalUnitType = 5;
 
 	private const int MaximumStandardErrorLines = 50;
@@ -98,7 +105,7 @@ public class CameraVideoSource(
 
 	public List<VideoFormat> GetVideoSourceFormats()
 	{
-		return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, RtpPayloadType, H264ClockRate, "packetization-mode=1") };
+		return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, RtpPayloadType, H264ClockRate, H264FormatParameters) };
 	}
 
 	public void SetVideoSourceFormat(VideoFormat videoFormat)

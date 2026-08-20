@@ -105,8 +105,9 @@ Primary ctor unchanged: `(IOptions<DeviceOptions>, ILogger<CameraVideoSource>)`.
 
 - **`EnsureInitialised()`** — cheap validation only, preserving the manager's "throw → no offer" behavior: throw `InvalidOperationException` if `Camera.GetPath()` is null/empty; on Linux also if `!File.Exists(LinuxPath)`.
 - **`GetVideoSourceFormats()`** — static, no init required:
-  `return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1") };`
+  `return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1") };`
   (verified ctor: `VideoFormat(VideoCodecsEnum codec, int formatID, int clockRate = 90000, string parameters = null)`).
+  **`profile-level-id` is load-bearing** — see the fmtp note in Risks.
 - **`SetVideoSourceFormat(VideoFormat)`** — no-op with a Debug log; the negotiated payload id is applied per-connection inside `VideoStream.SendVideo`.
 - **`ForceKeyFrame()`** — no-op with a Debug log ("external encoder; viewers recover on the next GOP").
 - **`AddConsumerAsync`** — under the lock: `encodedSampleConsumers += encodedSampleDelegate`, `consumerCount++`; on 0→1 start capture: bind the `UdpClient` on `IPEndPoint(IPAddress.Loopback, RtpPort)` with `Client.ReceiveBufferSize = 2 * 1024 * 1024`, read the bound port, spawn ffmpeg (`ArgumentList`, `RedirectStandardError`/`RedirectStandardOutput`, `CreateNoWindow`, `EnableRaisingEvents`, `Exited` → supervision), start the receive-loop `Task`.
@@ -195,6 +196,8 @@ If late joiners ever do show black video despite the app-side SPS/PPS injection,
 ## Risks / notes
 
 - **`h264_v4l2m2m` quirks (Pi 4)**: loose bitrate control and no on-demand keyframes remain. Two planning assumptions were wrong in opposite directions, both now settled on-device: the profile option is **fatal** on a name rather than warning (hence the numeric `66`), while SPS/PPS turned out to be repeated in-band on **every** frame, not merely once — so the app-side cache never has to fire here. Fallback if the hardware encoder ever misbehaves: `"LinuxEncoder": "libx264"` at reduced resolution.
+- **The fmtp must carry `profile-level-id`.** Omitting it is not a harmless default: RFC 6184 §8.1 requires a receiver to imply **baseline level 1.0**, whose limits are 99 macroblocks per frame (176x144), 1485 macroblocks/s and 64 kbps. A 1280x720@30 2000 kbps stream is 36x, 73x and 31x past those, and a browser that configures its decoder from the negotiated level renders the first keyframe off the in-band SPS and then freezes permanently. Measured on the Pi, the encoder's own SPS declares `profile_idc 66` / `level_idc 40` (baseline 4.0), so the advertised `42e01f` (constrained baseline 3.1, the profile every browser accepts, and exactly sized for 720p30) is paired with `level-asymmetry-allowed=1` to permit that difference.
+- **Keyframes are large and unprotected.** Measured on the Pi: 11 keyframes averaging 48 kB, peaking at 59.5 kB, which `RTPSession.RTP_MAX_PAYLOAD = 1200` turns into ~52 FU-A packets sent back to back with no pacing. SIPSorcery's offer carries only `a=rtcp-fb:96 transport-cc` — no `nack` — so a single lost packet costs the whole keyframe, and the next chance is a similarly sized one a GOP later. Levers if this bites: lower the bitrate in the configured command, or drop the resolution.
 - **Keyframe-on-PLI is lost** (the bindings honored it): packet-loss corruption on the WebRTC leg now persists up to the GOP length (1 s). Accepted.
 - **Loopback UDP loss under load**: mitigated by the 2 MB `SO_RCVBUF` and `pkt_size=1200`; a lost marker packet costs one frame (the depacketiser discards partial access units on timestamp change). Optional: a Debug log on sequence gaps.
 - **Fan-out is synchronous** on the receive loop (each peer's `SendVideo` does SRTP inline) — fine for the modeled few-peers scenario.
