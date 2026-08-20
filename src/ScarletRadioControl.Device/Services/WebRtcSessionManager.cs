@@ -255,7 +255,6 @@ public class WebRtcSessionManager(
 			}
 
 			await this.cameraVideoSource.AddConsumerAsync(encodedSampleDelegate);
-			this.cameraVideoSource.ForceKeyFrame();
 		}
 		catch (Exception exception)
 		{
