@@ -29,11 +29,11 @@ public class WebRtcSessionManager(
 
 	public event Action<string, RtcIceCandidateInit>? OnIceCandidate;
 
-	public void SetIceServers(ICollection<RtcIceServer>? rtcIceServers)
+	public void SetIceServers(ICollection<WebRtcSignalingClient.RtcIceServer>? rtcIceServers)
 	{
 		var mappedRtcIceServers = new List<RTCIceServer>();
 
-		foreach (var rtcIceServer in rtcIceServers ?? new List<RtcIceServer>())
+		foreach (var rtcIceServer in rtcIceServers ?? new List<WebRtcSignalingClient.RtcIceServer>())
 		{
 			foreach (var url in rtcIceServer.Urls ?? new List<string>())
 			{
@@ -68,7 +68,7 @@ public class WebRtcSessionManager(
 		this.logger.LogInformation("Configured {IceServerCount} ice servers", mappedRtcIceServers.Count);
 	}
 
-	public async Task<RtcSessionDescriptionInit> CreateOfferAsync(string clientConnectionId)
+	public async Task<WebRtcSignalingClient.RtcSessionDescriptionInit> CreateOfferAsync(string clientConnectionId)
 	{
 		this.ClosePeer(clientConnectionId);
 
@@ -134,10 +134,10 @@ public class WebRtcSessionManager(
 		await rtcPeerConnection.setLocalDescription(rtcSessionDescriptionInit);
 
 		this.logger.LogInformation("Created offer for client {ClientConnectionId}", clientConnectionId);
-		return new RtcSessionDescriptionInit { Sdp = rtcSessionDescriptionInit.sdp, Type = "offer" };
+		return new WebRtcSignalingClient.RtcSessionDescriptionInit { Sdp = rtcSessionDescriptionInit.sdp, Type = "offer" };
 	}
 
-	public void ApplyAnswer(string clientConnectionId, RtcSessionDescriptionInit rtcSessionDescriptionInit)
+	public void ApplyAnswer(string clientConnectionId, WebRtcSignalingClient.RtcSessionDescriptionInit rtcSessionDescriptionInit)
 	{
 		if (!this.webRtcPeerSessions.TryGetValue(clientConnectionId, out var webRtcPeerSession))
 		{
