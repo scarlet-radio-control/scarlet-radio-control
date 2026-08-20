@@ -27,6 +27,8 @@ public static class Startup
 			.AddSingleton<Services.CameraVideoSource>();
 		serviceCollection
 			.AddSingleton<Services.WebRtcSessionManager>();
+		serviceCollection
+			.AddSingleton<Services.WebRtcSignalingClient>();
 	}
 
 }
