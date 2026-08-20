@@ -101,13 +101,15 @@ The command that will actually be invoked is visible here, which is the point of
 
 ### 4. [Services/CameraVideoSource.cs](src/ScarletRadioControl.Device/Services/CameraVideoSource.cs) — rewrite the internals, same façade
 
-Primary ctor unchanged: `(IOptions<DeviceOptions>, ILogger<CameraVideoSource>)`. State under the existing `Lock`: `consumerCount`, multicast `EncodedSampleDelegate? encodedSampleConsumers`, `UdpClient? udpClient`, `Process? ffmpegProcess`, `CancellationTokenSource? receiveCancellationTokenSource`, `Task? receiveTask`, `int captureGeneration`, cached `byte[]? sps`/`pps`, `uint? previousRtpTimestamp`, and a ~50-line stderr ring buffer. `private const int RtpPayloadType = 96;`.
+Primary ctor unchanged: `(IOptions<DeviceOptions>, ILogger<CameraVideoSource>)`.
+
+State was consolidated in a later simplification pass. Everything sharing the capture's lifetime — socket, receive task and its `CancellationTokenSource`, bound port, current `Process` — lives in one `CameraCapture` object, so start/stop is a single reference swap under the `Lock` and the supervisor recognises a superseded respawn by `ReferenceEquals` rather than a generation counter. `consumerCount` is gone: the multicast `EncodedSampleDelegate` is null exactly when the last consumer leaves, and the receive loop reads it with `Volatile.Read` instead of taking the lock, so a spawn holding the lock across ffmpeg's fork/exec (10–40 ms on a Pi) cannot stall the 30 Hz path. The per-stream fields (cached SPS/PPS, previous timestamp, the once-only warning flag) moved into a `CaptureStreamState` owned by the receive loop on the same terms as the depacketiser, which deleted the hand-written reset block at teardown. Only the stderr ring buffer remains a locked field, since the stderr callback runs on its own thread.
 
 - **`EnsureInitialised()`** — cheap validation only, preserving the manager's "throw → no offer" behavior: throw `InvalidOperationException` if `Camera.GetPath()` is null/empty; on Linux also if `!File.Exists(LinuxPath)`.
 - **`GetVideoSourceFormats()`** — static, no init required:
   `return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, 96, 90000, "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1") };`
   (verified ctor: `VideoFormat(VideoCodecsEnum codec, int formatID, int clockRate = 90000, string parameters = null)`).
-  **`profile-level-id` is load-bearing** — see the fmtp note in Risks.
+  **`profile-level-id` is load-bearing** — see the fmtp note in Risks. The advertised id and the loopback filter are now separate constants (`OfferedVideoPayloadType` / `LoopbackRtpPayloadType`); the latter reaches the ffmpeg command line through a `{PayloadType}` placeholder, so config and code can no longer disagree.
 - **`SetVideoSourceFormat(VideoFormat)`** — no-op with a Debug log; the negotiated payload id is applied per-connection inside `VideoStream.SendVideo`.
 - **`ForceKeyFrame()`** — no-op with a Debug log ("external encoder; viewers recover on the next GOP").
 - **`AddConsumerAsync`** — under the lock: `encodedSampleConsumers += encodedSampleDelegate`, `consumerCount++`; on 0→1 start capture: bind the `UdpClient` on `IPEndPoint(IPAddress.Loopback, RtpPort)` with `Client.ReceiveBufferSize = 2 * 1024 * 1024`, read the bound port, spawn ffmpeg (`ArgumentList`, `RedirectStandardError`/`RedirectStandardOutput`, `CreateNoWindow`, `EnableRaisingEvents`, `Exited` → supervision), start the receive-loop `Task`.

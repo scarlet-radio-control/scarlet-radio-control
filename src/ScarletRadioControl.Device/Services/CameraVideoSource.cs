@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -37,15 +36,19 @@ public class CameraVideoSource(
 
 	private const int IdrSliceNalUnitType = 5;
 
+	// The payload type ffmpeg stamps on the loopback stream. It reaches the command line through the
+	// {PayloadType} placeholder, so the configured template and the receive filter below cannot drift apart.
+	private const int LoopbackRtpPayloadType = 96;
+
 	private const int MaximumStandardErrorLines = 50;
+
+	// What the sdp offer advertises, which is unrelated to the loopback one: VideoStream.SendVideo
+	// repacketises the access unit under whatever format each peer negotiated.
+	private const int OfferedVideoPayloadType = 96;
 
 	private const int PictureParameterSetNalUnitType = 8;
 
 	private const int ReceiveBufferSize = 2 * 1024 * 1024;
-
-	// The payload type ffmpeg stamps on the loopback stream. It is unrelated to the payload type each
-	// peer receives: VideoStream.SendVideo repacketises the access unit under the negotiated format.
-	private const int RtpPayloadType = 96;
 
 	private const int SequenceParameterSetNalUnitType = 7;
 
@@ -57,35 +60,16 @@ public class CameraVideoSource(
 
 	private readonly Lock lockObject = new Lock();
 
-	private int captureGeneration;
-
-	private int consumerCount;
+	private CameraCapture? cameraCapture;
 
 	private EncodedSampleDelegate? encodedSampleConsumers;
-
-	private Process? ffmpegProcess;
-
-	private bool parameterSetsUnavailableLogged;
-
-	private byte[]? pictureParameterSet;
-
-	private uint? previousRtpTimestamp;
-
-	private CancellationTokenSource? receiveCancellationTokenSource;
-
-	private Task? receiveTask;
-
-	private int rtpPort;
-
-	private byte[]? sequenceParameterSet;
-
-	private UdpClient? udpClient;
 
 	public void EnsureInitialised()
 	{
 		// Validation only: the capture itself starts with the first consumer. Throwing here is what stops
 		// the session manager from offering a video track it cannot feed.
-		var cameraPath = this.deviceOptions.Value.Camera.GetPath();
+		var deviceOptionsValue = this.deviceOptions.Value;
+		var cameraPath = deviceOptionsValue.Camera.GetPath();
 		if (string.IsNullOrEmpty(cameraPath))
 		{
 			throw new InvalidOperationException("The camera path is not configured for this platform.");
@@ -97,15 +81,19 @@ public class CameraVideoSource(
 		}
 
 		// The arguments carry no in code default, so an empty section here means no command to run at all.
-		if (string.IsNullOrWhiteSpace(this.deviceOptions.Value.Ffmpeg.GetArguments()))
+		if (string.IsNullOrWhiteSpace(deviceOptionsValue.Ffmpeg.GetArguments()))
 		{
 			throw new InvalidOperationException("The ffmpeg arguments are not configured for this platform.");
 		}
+
+		// Expanding the template here is what turns a misspelled placeholder into a refused offer rather
+		// than an exception on the first viewer. The port is a stand in; the bound one is known later.
+		FfmpegArgumentTemplate.Expand(deviceOptionsValue.Camera, deviceOptionsValue.Ffmpeg, 0, LoopbackRtpPayloadType);
 	}
 
 	public List<VideoFormat> GetVideoSourceFormats()
 	{
-		return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, RtpPayloadType, H264ClockRate, H264FormatParameters) };
+		return new List<VideoFormat> { new VideoFormat(VideoCodecsEnum.H264, OfferedVideoPayloadType, H264ClockRate, H264FormatParameters) };
 	}
 
 	public void SetVideoSourceFormat(VideoFormat videoFormat)
@@ -115,12 +103,6 @@ public class CameraVideoSource(
 		this.logger.LogDebug("Negotiated video format {VideoCodec} with payload id {VideoFormatId}", videoFormat.Codec, videoFormat.FormatID);
 	}
 
-	public void ForceKeyFrame()
-	{
-		// An external encoder cannot be asked for a keyframe on demand; the fixed short gop bounds the wait instead.
-		this.logger.LogDebug("Ignoring the keyframe request, viewers recover on the next keyframe of the configured gop");
-	}
-
 	public Task AddConsumerAsync(EncodedSampleDelegate encodedSampleDelegate)
 	{
 		// The capture is torn down whenever the last consumer leaves, so it may need starting again.
@@ -128,9 +110,9 @@ public class CameraVideoSource(
 
 		lock (this.lockObject)
 		{
-			this.encodedSampleConsumers += encodedSampleDelegate;
-			this.consumerCount++;
-			if (this.udpClient == null)
+			// Written volatile because the receive loop reads it without taking the lock.
+			Volatile.Write(ref this.encodedSampleConsumers, this.encodedSampleConsumers + encodedSampleDelegate);
+			if (this.cameraCapture == null)
 			{
 				this.StartCapture();
 			}
@@ -141,17 +123,14 @@ public class CameraVideoSource(
 
 	public async Task RemoveConsumerAsync(EncodedSampleDelegate encodedSampleDelegate)
 	{
-		var stopCapture = false;
+		bool stopCapture;
 		lock (this.lockObject)
 		{
-			this.encodedSampleConsumers -= encodedSampleDelegate;
-			if (this.consumerCount > 0)
-			{
-				this.consumerCount--;
+			Volatile.Write(ref this.encodedSampleConsumers, this.encodedSampleConsumers - encodedSampleDelegate);
 
-				// Stop instead of idling: a running ffmpeg would hold the camera open and keep filling the socket.
-				stopCapture = this.consumerCount == 0;
-			}
+			// The multicast delegate is null exactly when the last consumer has gone. Stop instead of
+			// idling: a running ffmpeg would hold the camera open and keep filling the socket.
+			stopCapture = this.encodedSampleConsumers == null;
 		}
 
 		if (stopCapture)
@@ -164,151 +143,10 @@ public class CameraVideoSource(
 	{
 		lock (this.lockObject)
 		{
-			this.encodedSampleConsumers = null;
-			this.consumerCount = 0;
+			Volatile.Write(ref this.encodedSampleConsumers, null);
 		}
 
 		await this.StopCaptureAsync();
-	}
-
-	private static List<string> BuildFfmpegArguments(CameraOptions cameraOptions, FfmpegOptions ffmpegOptions, int rtpPort)
-	{
-		var framerate = cameraOptions.Framerate > 0 ? cameraOptions.Framerate : DefaultFramerate;
-		var placeholderValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-		{
-			["CameraPath"] = cameraOptions.GetPath(),
-			["Framerate"] = $"{framerate}",
-			["Height"] = $"{cameraOptions.Height}",
-			["RtpPort"] = $"{rtpPort}",
-			["Width"] = $"{cameraOptions.Width}",
-		};
-
-		// Substituting per token rather than over the whole command line is what lets a value carry spaces:
-		// the dshow "video=HD Pro Webcam C920" path expands inside an already split argument, so it stays one
-		// entry in ArgumentList and never needs quoting.
-		var arguments = new List<string>();
-		foreach (var argument in TokeniseArguments(ffmpegOptions.GetArguments()))
-		{
-			arguments.Add(SubstitutePlaceholders(argument, placeholderValues));
-		}
-
-		return arguments;
-	}
-
-	private static IEnumerable<string> TokeniseArguments(string arguments)
-	{
-		var token = new StringBuilder();
-		var insideQuotes = false;
-		var started = false;
-
-		foreach (var character in arguments)
-		{
-			if (character == '"')
-			{
-				// The quotes group the value, they are never part of it. Tracking started separately keeps an
-				// explicitly empty "" argument alive.
-				insideQuotes = !insideQuotes;
-				started = true;
-				continue;
-			}
-
-			if (!insideQuotes && char.IsWhiteSpace(character))
-			{
-				if (started)
-				{
-					yield return token.ToString();
-					token.Clear();
-					started = false;
-				}
-
-				continue;
-			}
-
-			token.Append(character);
-			started = true;
-		}
-
-		if (started)
-		{
-			yield return token.ToString();
-		}
-	}
-
-	private static string SubstitutePlaceholders(string argument, Dictionary<string, string> placeholderValues)
-	{
-		var substituted = new StringBuilder();
-		var index = 0;
-
-		while (index < argument.Length)
-		{
-			var placeholderStart = argument.IndexOf('{', index);
-			var placeholderEnd = placeholderStart < 0 ? -1 : argument.IndexOf('}', placeholderStart);
-			if (placeholderEnd < 0)
-			{
-				substituted.Append(argument, index, argument.Length - index);
-				break;
-			}
-
-			var placeholder = argument[(placeholderStart + 1)..placeholderEnd];
-			if (!placeholderValues.TryGetValue(placeholder, out var placeholderValue))
-			{
-				// Failing loudly beats spawning ffmpeg with a literal brace in its arguments and reading the
-				// confusion out of its stderr later.
-				throw new InvalidOperationException($"The configured ffmpeg arguments use the unknown placeholder {{{placeholder}}}. The supported placeholders are {string.Join(", ", placeholderValues.Keys)}.");
-			}
-
-			substituted.Append(argument, index, placeholderStart - index);
-			substituted.Append(placeholderValue);
-			index = placeholderEnd + 1;
-		}
-
-		return substituted.ToString();
-	}
-
-	private static IEnumerable<(int Offset, int Length)> EnumerateNalUnits(byte[] accessUnit)
-	{
-		var nalUnitOffset = -1;
-		var index = 0;
-		while (index + 2 < accessUnit.Length)
-		{
-			if (accessUnit[index] != 0x00 || accessUnit[index + 1] != 0x00 || accessUnit[index + 2] != 0x01)
-			{
-				index++;
-				continue;
-			}
-
-			if (nalUnitOffset >= 0)
-			{
-				var nalUnitLength = MeasureNalUnit(accessUnit, nalUnitOffset, index);
-				if (nalUnitLength > 0)
-				{
-					yield return (nalUnitOffset, nalUnitLength);
-				}
-			}
-
-			index += 3;
-			nalUnitOffset = index;
-		}
-
-		if (nalUnitOffset >= 0)
-		{
-			var trailingNalUnitLength = MeasureNalUnit(accessUnit, nalUnitOffset, accessUnit.Length);
-			if (trailingNalUnitLength > 0)
-			{
-				yield return (nalUnitOffset, trailingNalUnitLength);
-			}
-		}
-	}
-
-	private static int MeasureNalUnit(byte[] accessUnit, int nalUnitOffset, int nalUnitEnd)
-	{
-		// The leading zero of a four byte start code, and any cabac padding, belong to the delimiter rather than the nal unit.
-		while (nalUnitEnd > nalUnitOffset && accessUnit[nalUnitEnd - 1] == 0x00)
-		{
-			nalUnitEnd--;
-		}
-
-		return nalUnitEnd - nalUnitOffset;
 	}
 
 	private void StartCapture()
@@ -318,10 +156,16 @@ public class CameraVideoSource(
 
 		// Bind before spawning so the ephemeral port is known, and so no packet is missed once ffmpeg starts sending.
 		var udpClient = new UdpClient(new IPEndPoint(IPAddress.Loopback, deviceOptionsValue.Ffmpeg.RtpPort));
+		CameraCapture cameraCapture;
 		try
 		{
 			udpClient.Client.ReceiveBufferSize = ReceiveBufferSize;
-			this.rtpPort = ((IPEndPoint)udpClient.Client.LocalEndPoint!).Port;
+			cameraCapture = new CameraCapture
+			{
+				ReceiveCancellationTokenSource = new CancellationTokenSource(),
+				RtpPort = ((IPEndPoint)udpClient.Client.LocalEndPoint!).Port,
+				UdpClient = udpClient,
+			};
 
 			this.logger.LogInformation(
 				"Starting the capture of camera {CameraPath} at {Width}x{Height}@{Framerate} over rtp port {RtpPort}",
@@ -329,9 +173,9 @@ public class CameraVideoSource(
 				cameraOptions.Width,
 				cameraOptions.Height,
 				cameraOptions.Framerate,
-				this.rtpPort);
+				cameraCapture.RtpPort);
 
-			this.ffmpegProcess = this.StartFfmpegProcess(++this.captureGeneration);
+			cameraCapture.FfmpegProcess = this.StartFfmpegProcess(cameraCapture);
 		}
 		catch (Exception)
 		{
@@ -339,44 +183,33 @@ public class CameraVideoSource(
 			throw;
 		}
 
-		var receiveCancellationTokenSource = new CancellationTokenSource();
-		this.udpClient = udpClient;
-		this.receiveCancellationTokenSource = receiveCancellationTokenSource;
-		this.receiveTask = Task.Run(() => this.ReceiveAsync(udpClient, receiveCancellationTokenSource.Token));
+		cameraCapture.ReceiveTask = Task.Run(() => this.ReceiveAsync(cameraCapture, cameraCapture.ReceiveCancellationTokenSource.Token));
+		this.cameraCapture = cameraCapture;
 	}
 
 	private async Task StopCaptureAsync()
 	{
-		Process? ffmpegProcessToStop;
-		CancellationTokenSource? receiveCancellationTokenSourceToStop;
-		Task? receiveTaskToStop;
-		UdpClient? udpClientToStop;
-
+		CameraCapture? cameraCapture;
 		lock (this.lockObject)
 		{
-			// Supersede any respawn that is already in flight before tearing the capture down.
-			this.captureGeneration++;
-			ffmpegProcessToStop = this.ffmpegProcess;
-			receiveCancellationTokenSourceToStop = this.receiveCancellationTokenSource;
-			receiveTaskToStop = this.receiveTask;
-			udpClientToStop = this.udpClient;
-			this.ffmpegProcess = null;
-			this.receiveCancellationTokenSource = null;
-			this.receiveTask = null;
-			this.udpClient = null;
+			// Swapping the reference out is what supersedes a respawn that is already in flight: the
+			// supervisor below compares against it by identity.
+			cameraCapture = this.cameraCapture;
+			this.cameraCapture = null;
 		}
 
-		if (udpClientToStop == null)
+		if (cameraCapture == null)
 		{
 			return;
 		}
 
-		if (ffmpegProcessToStop != null)
+		var ffmpegProcess = cameraCapture.FfmpegProcess;
+		if (ffmpegProcess != null)
 		{
 			try
 			{
-				ffmpegProcessToStop.Kill(entireProcessTree: true);
-				await ffmpegProcessToStop.WaitForExitAsync();
+				ffmpegProcess.Kill(entireProcessTree: true);
+				await ffmpegProcess.WaitForExitAsync();
 			}
 			catch (Exception exception)
 			{
@@ -384,21 +217,17 @@ public class CameraVideoSource(
 			}
 			finally
 			{
-				ffmpegProcessToStop.Dispose();
+				ffmpegProcess.Dispose();
 			}
 		}
 
 		// Cancel and drain the receive loop before closing the socket it is blocked on.
-		if (receiveCancellationTokenSourceToStop != null)
-		{
-			await receiveCancellationTokenSourceToStop.CancelAsync();
-		}
-
-		if (receiveTaskToStop != null)
+		await cameraCapture.ReceiveCancellationTokenSource.CancelAsync();
+		if (cameraCapture.ReceiveTask != null)
 		{
 			try
 			{
-				await receiveTaskToStop;
+				await cameraCapture.ReceiveTask;
 			}
 			catch (Exception exception)
 			{
@@ -406,35 +235,30 @@ public class CameraVideoSource(
 			}
 		}
 
-		receiveCancellationTokenSourceToStop?.Dispose();
-		udpClientToStop.Dispose();
+		cameraCapture.ReceiveCancellationTokenSource.Dispose();
+		cameraCapture.UdpClient.Dispose();
 
 		lock (this.lockObject)
 		{
 			this.ffmpegStandardErrorLines.Clear();
-			this.parameterSetsUnavailableLogged = false;
-			this.pictureParameterSet = null;
-			this.previousRtpTimestamp = null;
-			this.sequenceParameterSet = null;
 		}
 
 		this.logger.LogInformation("Stopped the camera capture");
 	}
 
-	private Process StartFfmpegProcess(int captureGeneration)
+	private Process StartFfmpegProcess(CameraCapture cameraCapture)
 	{
 		var deviceOptionsValue = this.deviceOptions.Value;
-		var ffmpegOptions = deviceOptionsValue.Ffmpeg;
 
 		var processStartInfo = new ProcessStartInfo
 		{
 			CreateNoWindow = true,
-			FileName = ffmpegOptions.ExecutablePath,
+			FileName = deviceOptionsValue.Ffmpeg.ExecutablePath,
 			RedirectStandardError = true,
 			RedirectStandardOutput = true,
 			UseShellExecute = false,
 		};
-		foreach (var argument in BuildFfmpegArguments(deviceOptionsValue.Camera, ffmpegOptions, this.rtpPort))
+		foreach (var argument in FfmpegArgumentTemplate.Expand(deviceOptionsValue.Camera, deviceOptionsValue.Ffmpeg, cameraCapture.RtpPort, LoopbackRtpPayloadType))
 		{
 			processStartInfo.ArgumentList.Add(argument);
 		}
@@ -442,7 +266,7 @@ public class CameraVideoSource(
 		var ffmpegProcess = new Process { EnableRaisingEvents = true, StartInfo = processStartInfo };
 		ffmpegProcess.ErrorDataReceived += this.OnFfmpegErrorDataReceived;
 		ffmpegProcess.OutputDataReceived += this.OnFfmpegOutputDataReceived;
-		ffmpegProcess.Exited += (_, _) => _ = this.HandleFfmpegExitedAsync(captureGeneration, ffmpegProcess);
+		ffmpegProcess.Exited += (_, _) => _ = this.HandleFfmpegExitedAsync(cameraCapture, ffmpegProcess);
 
 		this.logger.LogInformation("Spawning ffmpeg: {FfmpegExecutablePath} {FfmpegArguments}", processStartInfo.FileName, string.Join(' ', processStartInfo.ArgumentList));
 		ffmpegProcess.Start();
@@ -451,14 +275,14 @@ public class CameraVideoSource(
 		return ffmpegProcess;
 	}
 
-	private async Task HandleFfmpegExitedAsync(int captureGeneration, Process exitedFfmpegProcess)
+	private async Task HandleFfmpegExitedAsync(CameraCapture cameraCapture, Process exitedFfmpegProcess)
 	{
 		try
 		{
 			string ffmpegStandardErrorTail;
 			lock (this.lockObject)
 			{
-				if (this.captureGeneration != captureGeneration || this.consumerCount == 0)
+				if (!this.IsCurrentFfmpegProcess(cameraCapture, exitedFfmpegProcess))
 				{
 					return;
 				}
@@ -477,13 +301,13 @@ public class CameraVideoSource(
 
 			lock (this.lockObject)
 			{
-				if (this.captureGeneration != captureGeneration || this.consumerCount == 0 || this.udpClient == null)
+				if (!this.IsCurrentFfmpegProcess(cameraCapture, exitedFfmpegProcess))
 				{
 					return;
 				}
 
 				// The socket stays bound and the receive loop keeps running, so only the process is replaced.
-				this.ffmpegProcess = this.StartFfmpegProcess(++this.captureGeneration);
+				cameraCapture.FfmpegProcess = this.StartFfmpegProcess(cameraCapture);
 			}
 
 			exitedFfmpegProcess.Dispose();
@@ -492,6 +316,13 @@ public class CameraVideoSource(
 		{
 			this.logger.LogError(exception, "Failed to restart the ffmpeg process");
 		}
+	}
+
+	// Identity does the job the generation counter used to: a deliberate stop swaps the capture out, and a
+	// respawn swaps the process, so a superseded handler recognises itself without a counter to keep in step.
+	private bool IsCurrentFfmpegProcess(CameraCapture cameraCapture, Process ffmpegProcess)
+	{
+		return ReferenceEquals(this.cameraCapture, cameraCapture) && ReferenceEquals(cameraCapture.FfmpegProcess, ffmpegProcess);
 	}
 
 	private void OnFfmpegErrorDataReceived(object sender, DataReceivedEventArgs dataReceivedEventArgs)
@@ -525,41 +356,43 @@ public class CameraVideoSource(
 		this.logger.LogDebug("ffmpeg: {FfmpegStandardOutputLine}", dataReceivedEventArgs.Data);
 	}
 
-	private async Task ReceiveAsync(UdpClient udpClient, CancellationToken cancellationToken)
+	private async Task ReceiveAsync(CameraCapture cameraCapture, CancellationToken cancellationToken)
 	{
-		// The depacketiser is stateful and not thread safe, so it lives and dies with this loop.
+		// The depacketiser and the stream state are stateful and not thread safe, so they live and die
+		// with this loop rather than as fields the stop path would have to reset by hand.
 		var h264Depacketiser = new H264Depacketiser();
+		var captureStreamState = new CaptureStreamState();
 
 		try
 		{
 			while (!cancellationToken.IsCancellationRequested)
 			{
-				var udpReceiveResult = await udpClient.ReceiveAsync(cancellationToken);
+				var udpReceiveResult = await cameraCapture.UdpClient.ReceiveAsync(cancellationToken);
 				if (!RTPPacket.TryParse(udpReceiveResult.Buffer, out var rtpPacket, out _))
 				{
 					continue;
 				}
 
-				if (rtpPacket.Header.PayloadType != RtpPayloadType)
+				if (rtpPacket.Header.PayloadType != LoopbackRtpPayloadType)
 				{
 					continue;
 				}
 
-				// Returns an annex-b access unit on the marker bit packet, null while the frame is still arriving.
-				var annexBStream = h264Depacketiser.ProcessRTPPayload(rtpPacket.GetPayloadBytes(), rtpPacket.Header.SequenceNumber, rtpPacket.Header.Timestamp, rtpPacket.Header.MarkerBit, out _);
-				if (annexBStream == null)
+				// Returns the frame's nal units on the marker bit packet, null while it is still arriving.
+				// Taking them as nal units rather than as a joined stream keeps the boundaries the
+				// depacketiser already knows, instead of rescanning the joined bytes for start codes.
+				var nalUnits = h264Depacketiser.ProcessRTPPayloadAsNals(rtpPacket.GetPayloadBytes(), rtpPacket.Header.SequenceNumber, rtpPacket.Header.Timestamp, rtpPacket.Header.MarkerBit, out _);
+				if (nalUnits == null || nalUnits.Count == 0)
 				{
 					continue;
 				}
 
-				var accessUnit = this.EnsureParameterSets(annexBStream.ToArray());
-				var durationRtpUnits = this.ComputeDurationRtpUnits(rtpPacket.Header.Timestamp);
+				var accessUnit = this.BuildAccessUnit(nalUnits, captureStreamState);
+				var durationRtpUnits = this.ComputeDurationRtpUnits(rtpPacket.Header.Timestamp, captureStreamState);
 
-				EncodedSampleDelegate? encodedSampleConsumers;
-				lock (this.lockObject)
-				{
-					encodedSampleConsumers = this.encodedSampleConsumers;
-				}
+				// Read without the lock: it is a single reference, and this path must not queue behind a
+				// spawn, which holds the lock across ffmpeg's fork and exec.
+				var encodedSampleConsumers = Volatile.Read(ref this.encodedSampleConsumers);
 
 				try
 				{
@@ -585,71 +418,95 @@ public class CameraVideoSource(
 		}
 	}
 
-	private byte[] EnsureParameterSets(byte[] accessUnit)
+	// Joins the frame's nal units into one annex-b access unit, caching the parameter sets on the way past
+	// and prepending them to any idr that arrived without them.
+	private byte[] BuildAccessUnit(List<byte[]> nalUnits, CaptureStreamState captureStreamState)
 	{
 		var containsIdrSlice = false;
 		var containsSequenceParameterSet = false;
 
-		foreach (var (nalUnitOffset, nalUnitLength) in EnumerateNalUnits(accessUnit))
+		foreach (var nalUnit in nalUnits)
 		{
-			switch (accessUnit[nalUnitOffset] & 0x1F)
+			if (nalUnit.Length == 0)
+			{
+				continue;
+			}
+
+			switch (nalUnit[0] & 0x1F)
 			{
 				case IdrSliceNalUnitType:
 					containsIdrSlice = true;
 					break;
 				case SequenceParameterSetNalUnitType:
 					containsSequenceParameterSet = true;
-					this.sequenceParameterSet = accessUnit.AsSpan(nalUnitOffset, nalUnitLength).ToArray();
+					captureStreamState.SequenceParameterSet = nalUnit;
 					break;
 				case PictureParameterSetNalUnitType:
-					this.pictureParameterSet = accessUnit.AsSpan(nalUnitOffset, nalUnitLength).ToArray();
+					captureStreamState.PictureParameterSet = nalUnit;
 					break;
 				default:
 					break;
 			}
 		}
 
-		if (!containsIdrSlice || containsSequenceParameterSet)
+		// Browsers need the parameter sets in front of every idr, and neither h264_v4l2m2m nor the rtp
+		// muxer's global header handling guarantees that.
+		var sequenceParameterSet = captureStreamState.SequenceParameterSet;
+		var pictureParameterSet = captureStreamState.PictureParameterSet;
+		var prependParameterSets = containsIdrSlice && !containsSequenceParameterSet;
+		if (prependParameterSets && (sequenceParameterSet == null || pictureParameterSet == null))
 		{
-			return accessUnit;
-		}
-
-		var sequenceParameterSet = this.sequenceParameterSet;
-		var pictureParameterSet = this.pictureParameterSet;
-		if (sequenceParameterSet == null || pictureParameterSet == null)
-		{
-			if (!this.parameterSetsUnavailableLogged)
+			if (!captureStreamState.ParameterSetsUnavailableLogged)
 			{
-				this.parameterSetsUnavailableLogged = true;
+				captureStreamState.ParameterSetsUnavailableLogged = true;
 				this.logger.LogWarning("The encoder produced a keyframe before any sps/pps, viewers cannot decode it yet");
 			}
 
-			return accessUnit;
+			prependParameterSets = false;
 		}
 
-		// Browsers need the parameter sets in front of every idr, and neither h264_v4l2m2m nor the rtp
-		// muxer's global header handling guarantees that.
-		var parameterisedAccessUnit = new byte[(2 * AnnexBStartCode.Length) + sequenceParameterSet.Length + pictureParameterSet.Length + accessUnit.Length];
-		var offset = 0;
-		foreach (var parameterSet in new[] { sequenceParameterSet, pictureParameterSet })
+		var accessUnitLength = 0;
+		if (prependParameterSets)
 		{
-			AnnexBStartCode.CopyTo(parameterisedAccessUnit, offset);
-			offset += AnnexBStartCode.Length;
-			parameterSet.CopyTo(parameterisedAccessUnit, offset);
-			offset += parameterSet.Length;
+			accessUnitLength += (2 * AnnexBStartCode.Length) + sequenceParameterSet!.Length + pictureParameterSet!.Length;
 		}
-		accessUnit.CopyTo(parameterisedAccessUnit, offset);
 
-		return parameterisedAccessUnit;
+		foreach (var nalUnit in nalUnits)
+		{
+			accessUnitLength += AnnexBStartCode.Length + nalUnit.Length;
+		}
+
+		var accessUnit = new byte[accessUnitLength];
+		var offset = 0;
+		if (prependParameterSets)
+		{
+			AppendNalUnit(accessUnit, ref offset, sequenceParameterSet!);
+			AppendNalUnit(accessUnit, ref offset, pictureParameterSet!);
+		}
+
+		foreach (var nalUnit in nalUnits)
+		{
+			AppendNalUnit(accessUnit, ref offset, nalUnit);
+		}
+
+		return accessUnit;
 	}
 
-	private uint ComputeDurationRtpUnits(uint rtpTimestamp)
+	private static void AppendNalUnit(byte[] accessUnit, ref int offset, byte[] nalUnit)
+	{
+		AnnexBStartCode.CopyTo(accessUnit, offset);
+		offset += AnnexBStartCode.Length;
+		nalUnit.CopyTo(accessUnit, offset);
+		offset += nalUnit.Length;
+	}
+
+	private uint ComputeDurationRtpUnits(uint rtpTimestamp, CaptureStreamState captureStreamState)
 	{
 		var framerate = this.deviceOptions.Value.Camera.Framerate;
 		var fallbackDurationRtpUnits = (uint)(H264ClockRate / (framerate > 0 ? framerate : DefaultFramerate));
 
-		var previousRtpTimestamp = this.previousRtpTimestamp;
-		this.previousRtpTimestamp = rtpTimestamp;
+		var previousRtpTimestamp = captureStreamState.PreviousRtpTimestamp;
+		captureStreamState.PreviousRtpTimestamp = rtpTimestamp;
 		if (previousRtpTimestamp == null)
 		{
 			return fallbackDurationRtpUnits;
@@ -659,6 +516,39 @@ public class CameraVideoSource(
 		// fresh timestamp base, which shows up as an absurd delta and falls back to the nominal duration.
 		var durationRtpUnits = unchecked(rtpTimestamp - previousRtpTimestamp.Value);
 		return durationRtpUnits == 0 || durationRtpUnits > H264ClockRate ? fallbackDurationRtpUnits : durationRtpUnits;
+	}
+
+	// One running capture: the bound socket, the loop that drains it, and the ffmpeg process currently
+	// feeding it. Grouping everything with the same lifetime makes starting and stopping a single
+	// reference swap instead of six fields that have to be kept in step.
+	private sealed class CameraCapture
+	{
+
+		public Process? FfmpegProcess { get; set; }
+
+		public required CancellationTokenSource ReceiveCancellationTokenSource { get; init; }
+
+		public Task? ReceiveTask { get; set; }
+
+		public required int RtpPort { get; init; }
+
+		public required UdpClient UdpClient { get; init; }
+
+	}
+
+	// Per stream state owned solely by the receive loop, on the same terms as the depacketiser: one thread,
+	// one lifetime, so it needs neither the lock nor a reset when the capture stops.
+	private sealed class CaptureStreamState
+	{
+
+		public bool ParameterSetsUnavailableLogged { get; set; }
+
+		public byte[]? PictureParameterSet { get; set; }
+
+		public uint? PreviousRtpTimestamp { get; set; }
+
+		public byte[]? SequenceParameterSet { get; set; }
+
 	}
 
 }
