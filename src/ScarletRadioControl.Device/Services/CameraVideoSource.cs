@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -22,8 +23,6 @@ public class CameraVideoSource(
 
 	private readonly IOptions<DeviceOptions> deviceOptions = deviceOptions;
 	private readonly ILogger<CameraVideoSource> logger = logger;
-
-	private const int BaselineProfileIdc = 66;
 
 	private const int DefaultFramerate = 30;
 
@@ -89,6 +88,12 @@ public class CameraVideoSource(
 		{
 			throw new InvalidOperationException($"The camera device {cameraPath} does not exist.");
 		}
+
+		// The arguments carry no in code default, so an empty section here means no command to run at all.
+		if (string.IsNullOrWhiteSpace(this.deviceOptions.Value.Ffmpeg.GetArguments()))
+		{
+			throw new InvalidOperationException("The ffmpeg arguments are not configured for this platform.");
+		}
 	}
 
 	public List<VideoFormat> GetVideoSourceFormats()
@@ -106,7 +111,7 @@ public class CameraVideoSource(
 	public void ForceKeyFrame()
 	{
 		// An external encoder cannot be asked for a keyframe on demand; the fixed short gop bounds the wait instead.
-		this.logger.LogDebug("Ignoring the keyframe request, the external encoder emits one every {GopSeconds}s", this.deviceOptions.Value.Ffmpeg.GopSeconds);
+		this.logger.LogDebug("Ignoring the keyframe request, viewers recover on the next keyframe of the configured gop");
 	}
 
 	public Task AddConsumerAsync(EncodedSampleDelegate encodedSampleDelegate)
@@ -162,47 +167,95 @@ public class CameraVideoSource(
 	private static List<string> BuildFfmpegArguments(CameraOptions cameraOptions, FfmpegOptions ffmpegOptions, int rtpPort)
 	{
 		var framerate = cameraOptions.Framerate > 0 ? cameraOptions.Framerate : DefaultFramerate;
-		var gopSize = framerate * Math.Max(1, ffmpegOptions.GopSeconds);
-		var encoder = ffmpegOptions.GetEncoder();
-		var videoSize = $"{cameraOptions.Width}x{cameraOptions.Height}";
-
-		var arguments = new List<string> { "-hide_banner", "-nostats", "-loglevel", "warning", "-fflags", "nobuffer" };
-
-		// The input is pinned to mjpeg on both platforms: uvc bandwidth does not carry raw 720p30.
-		if (OperatingSystem.IsWindows())
+		var placeholderValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 		{
-			arguments.AddRange(new[] { "-f", "dshow", "-rtbufsize", "64M", "-video_size", videoSize, "-framerate", $"{framerate}", "-vcodec", "mjpeg" });
-		}
-		else
+			["CameraPath"] = cameraOptions.GetPath(),
+			["Framerate"] = $"{framerate}",
+			["Height"] = $"{cameraOptions.Height}",
+			["RtpPort"] = $"{rtpPort}",
+			["Width"] = $"{cameraOptions.Width}",
+		};
+
+		// Substituting per token rather than over the whole command line is what lets a value carry spaces:
+		// the dshow "video=HD Pro Webcam C920" path expands inside an already split argument, so it stays one
+		// entry in ArgumentList and never needs quoting.
+		var arguments = new List<string>();
+		foreach (var argument in TokeniseArguments(ffmpegOptions.GetArguments()))
 		{
-			arguments.AddRange(new[] { "-f", "v4l2", "-input_format", "mjpeg", "-video_size", videoSize, "-framerate", $"{framerate}" });
+			arguments.Add(SubstitutePlaceholders(argument, placeholderValues));
 		}
-
-		arguments.AddRange(new[] { "-i", cameraOptions.GetPath() });
-
-		// yuv420p is load-bearing: mjpeg decodes to yuvj422p, and browsers reject the 4:2:2 High profile that would follow.
-		arguments.AddRange(new[] { "-an", "-c:v", encoder, "-pix_fmt", "yuv420p" });
-
-		if (string.Equals(encoder, "libx264", StringComparison.OrdinalIgnoreCase))
-		{
-			// zerolatency drops b-frames, lookahead and frame threading; the half second vbv keeps an idr
-			// spike from stalling the webrtc leg.
-			arguments.AddRange(new[] { "-profile:v", "baseline", "-preset", "ultrafast", "-tune", "zerolatency", "-sc_threshold", "0", "-x264-params", "repeat-headers=1", "-maxrate", $"{ffmpegOptions.BitrateKbps}k", "-bufsize", $"{ffmpegOptions.BitrateKbps / 2}k" });
-		}
-		else
-		{
-			// Only libx264 names its profiles. h264_v4l2m2m and friends take the numeric profile_idc off the
-			// generic encoder option, and fail to start on "baseline".
-			arguments.AddRange(new[] { "-profile:v", $"{BaselineProfileIdc}" });
-		}
-
-		arguments.AddRange(new[] { "-b:v", $"{ffmpegOptions.BitrateKbps}k", "-g", $"{gopSize}", "-keyint_min", $"{gopSize}" });
-		arguments.AddRange(ffmpegOptions.ExtraArgs);
-
-		// pkt_size keeps every datagram below the mtu so nothing is ip fragmented.
-		arguments.AddRange(new[] { "-f", "rtp", "-payload_type", $"{RtpPayloadType}", $"rtp://127.0.0.1:{rtpPort}?pkt_size=1200" });
 
 		return arguments;
+	}
+
+	private static IEnumerable<string> TokeniseArguments(string arguments)
+	{
+		var token = new StringBuilder();
+		var insideQuotes = false;
+		var started = false;
+
+		foreach (var character in arguments)
+		{
+			if (character == '"')
+			{
+				// The quotes group the value, they are never part of it. Tracking started separately keeps an
+				// explicitly empty "" argument alive.
+				insideQuotes = !insideQuotes;
+				started = true;
+				continue;
+			}
+
+			if (!insideQuotes && char.IsWhiteSpace(character))
+			{
+				if (started)
+				{
+					yield return token.ToString();
+					token.Clear();
+					started = false;
+				}
+
+				continue;
+			}
+
+			token.Append(character);
+			started = true;
+		}
+
+		if (started)
+		{
+			yield return token.ToString();
+		}
+	}
+
+	private static string SubstitutePlaceholders(string argument, Dictionary<string, string> placeholderValues)
+	{
+		var substituted = new StringBuilder();
+		var index = 0;
+
+		while (index < argument.Length)
+		{
+			var placeholderStart = argument.IndexOf('{', index);
+			var placeholderEnd = placeholderStart < 0 ? -1 : argument.IndexOf('}', placeholderStart);
+			if (placeholderEnd < 0)
+			{
+				substituted.Append(argument, index, argument.Length - index);
+				break;
+			}
+
+			var placeholder = argument[(placeholderStart + 1)..placeholderEnd];
+			if (!placeholderValues.TryGetValue(placeholder, out var placeholderValue))
+			{
+				// Failing loudly beats spawning ffmpeg with a literal brace in its arguments and reading the
+				// confusion out of its stderr later.
+				throw new InvalidOperationException($"The configured ffmpeg arguments use the unknown placeholder {{{placeholder}}}. The supported placeholders are {string.Join(", ", placeholderValues.Keys)}.");
+			}
+
+			substituted.Append(argument, index, placeholderStart - index);
+			substituted.Append(placeholderValue);
+			index = placeholderEnd + 1;
+		}
+
+		return substituted.ToString();
 	}
 
 	private static IEnumerable<(int Offset, int Length)> EnumerateNalUnits(byte[] accessUnit)

@@ -10,6 +10,14 @@ The `AddConsumerAsync`/`RemoveConsumerAsync` façade contract of `CameraVideoSou
 
 All SIPSorcery APIs below were verified against `sipsorcery-org/sipsorcery` tag **v10.0.15** (paths under `src/SIPSorcery/`).
 
+## Status
+
+**Implemented and building clean** (`dotnet build`, 0 warnings under TreatWarningsAsErrors + style enforcement): all five change sections landed — the `SIPSorceryMedia.FFmpeg` package reference is gone from both [Directory.Packages.props](Directory.Packages.props) and the [csproj](src/ScarletRadioControl.Device/ScarletRadioControl.Device.csproj), [FfmpegOptions.cs](src/ScarletRadioControl.Device/Options/FfmpegOptions.cs) and the [appsettings.json](src/ScarletRadioControl.Device/appsettings.json) `Ffmpeg` section match the shapes below, and [CameraVideoSource.cs](src/ScarletRadioControl.Device/Services/CameraVideoSource.cs) is rewritten behind the unchanged façade. No reference to the removed bindings survives anywhere outside this document.
+
+The ffmpeg command line itself lives in [appsettings.json](src/ScarletRadioControl.Device/appsettings.json) as a per-platform template (section 2), so the invoked command is readable where it is configured and no encoder knowledge is left in code.
+
+**Verified on the Raspberry Pi 4** (see Verification for the measurements). **Not yet verified on the Windows dev machine** — that leg needs the C920 plugged into a Windows host and a browser, so it remains open.
+
 ## Decisions
 
 1. **Depacketize + `SendVideo`, not raw RTP forwarding.**
@@ -19,7 +27,7 @@ All SIPSorcery APIs below were verified against `sipsorcery-org/sipsorcery` tag 
 	- **The latency cost is ≈ 0.** ffmpeg emits each encoded access unit as a back-to-back packet burst on loopback (no pacing), and the depacketiser releases the frame on the **marker-bit packet** — it never waits for the next frame's timestamp. The hold is the burst duration (well under 1 ms) against a 33 ms frame interval; `SendVideo` then sends all of that frame's packets immediately. The real latency levers are the encoder settings and the browser jitter buffer (see Risks / notes).
 	- `SendRtpRaw` rejected: it would change the consumer delegate type (breaking the façade and `WebRtcPeerSession.EncodedSampleDelegate`), require per-peer negotiated-payload-type plumbing, forfeit the access-unit patch point that decision 4 depends on, and its RTCP sender-report counter behavior is unverified.
 2. **Ephemeral loopback port**: bind a `UdpClient` on `127.0.0.1:0` **before** spawning ffmpeg, read `((IPEndPoint)Client.LocalEndPoint).Port` into the ffmpeg args. Keep an `RtpPort` option (default `0` = ephemeral) as a debugging escape hatch — a fixed port allows wireshark/ffplay inspection.
-3. **Keyframes**: fixed short GOP, `-g` = `Framerate × GopSeconds` (default 1 s → 30). `ForceKeyFrame()` becomes a Debug-log no-op (an external encoder cannot service it); nothing reacts to RTCP PLI (SIPSorcery 10.0.15 exposes no typed PLI event on `RTCPeerConnection`, and there would be nothing to do with it). Late joiners and post-loss recovery are bounded at ~1 s.
+3. **Keyframes**: fixed short GOP, `-g {Framerate}` in the configured command (so one keyframe per second at any framerate; edit the template for a different GOP). `ForceKeyFrame()` becomes a Debug-log no-op (an external encoder cannot service it); nothing reacts to RTCP PLI (SIPSorcery 10.0.15 exposes no typed PLI event on `RTCPeerConnection`, and there would be nothing to do with it). Late joiners and post-loss recovery are bounded at ~1 s.
 4. **SPS/PPS before every IDR, guaranteed app-side**: the receive loop caches the latest in-band SPS (NAL 7) / PPS (NAL 8) and prepends them (4-byte start codes) to any access unit containing an IDR (NAL 5) that lacks them. Needed because ffmpeg's `v4l2_m2m_enc.c` never sets `V4L2_CID_MPEG_VIDEO_REPEAT_SEQ_HEADER` (verified at ffmpeg tag n8.1.2), and the RTP muxer's global-header flag moves x264's SPS/PPS out-of-band; `-x264-params repeat-headers=1` is belt-and-suspenders on the libx264 path. Do **our own NAL-type scan** — `H264Depacketiser`'s `isKeyFrame` out-param is unreliable (its source swaps the constants: `IDR_SLICE = 1; NON_IDR_SLICE = 5;`).
 5. **Keep the class name `CameraVideoSource`** (it names the role, not the mechanism); rewrite the internals only. Close-on-idle semantics preserved: 0→1 consumers binds the socket, spawns ffmpeg and starts the receive loop; 1→0 kills ffmpeg and closes the socket.
 6. **Supervision**: on unexpected ffmpeg exit while consumers > 0 → log exit code + stderr tail at Error, wait 1 s, respawn against the **same still-bound socket** (the receive loop is untouched). A generation counter guards a respawn racing a deliberate stop.
@@ -35,51 +43,59 @@ All SIPSorcery APIs below were verified against `sipsorcery-org/sipsorcery` tag 
 
 ### 2. [Options/FfmpegOptions.cs](src/ScarletRadioControl.Device/Options/FfmpegOptions.cs) — full rewrite
 
-Drop `LibraryPath`/`LogLevel` and the `using SIPSorceryMedia.FFmpeg;` (both binding-specific). New shape — mutable `get; set;` for the config binder, per-platform pattern mirroring `CameraOptions`:
+Drop `LibraryPath`/`LogLevel` and the `using SIPSorceryMedia.FFmpeg;` (both binding-specific). **The whole ffmpeg command line moves into configuration** as a per-platform template, mirroring the `LinuxPath`/`WindowsPath` pattern in `CameraOptions`. That leaves no encoder knowledge in code at all — no `BitrateKbps`, `GopSeconds`, `LinuxEncoder`/`WindowsEncoder`/`GetEncoder()`, and no `ExtraArgs` escape hatch, because the command itself is now the escape hatch. Mutable `get; set;` for the config binder, and deliberately no default value on either template:
 
 ```csharp
 using System;
-using System.Collections.Generic;
 
 namespace ScarletRadioControl.Device.Options;
 
 public class FfmpegOptions
 {
 
-	public int BitrateKbps { get; set; } = 2000;
-
 	public string ExecutablePath { get; set; } = "ffmpeg";
 
-	public ICollection<string> ExtraArgs { get; set; } = new List<string>();
-
-	public int GopSeconds { get; set; } = 1;
-
-	public string LinuxEncoder { get; set; } = "h264_v4l2m2m";
+	public string LinuxArguments { get; set; }
 
 	public int RtpPort { get; set; }
 
-	public string WindowsEncoder { get; set; } = "libx264";
+	public string WindowsArguments { get; set; }
 
-	public string GetEncoder()
+	public string GetArguments()
 	{
-		return OperatingSystem.IsWindows() ? this.WindowsEncoder : this.LinuxEncoder;
+		return OperatingSystem.IsWindows() ? this.WindowsArguments : this.LinuxArguments;
 	}
 
 }
 ```
 
-`ExtraArgs` entries are appended verbatim (via `ProcessStartInfo.ArgumentList`) after the encoder options, before the `-f rtp` output.
+**No in-code default for the arguments.** Neither template is initialised here, so [appsettings.json](src/ScarletRadioControl.Device/appsettings.json) is the single place the invoked command is written down and the two can never drift. `EnsureInitialised()` covers the consequence: a missing, empty or whitespace template throws `InvalidOperationException` alongside the existing camera-path checks, so an unconfigured platform fails as "no video offer" rather than as a `NullReferenceException` inside the tokeniser.
+
+**Placeholders.** The template is split on whitespace and each token then has its `{Placeholder}` tokens substituted. Substituting *after* the split is what makes quoting unnecessary: `{CameraPath}` expands to `video=HD Pro Webcam C920` **inside an already-separated token**, so it reaches `ProcessStartInfo.ArgumentList` as one argument despite the spaces. Double quotes in the template are still honoured for grouping a literal value, and are stripped.
+
+| Placeholder | Source | Notes |
+| --- | --- | --- |
+| `{RtpPort}` | the bound socket | The one placeholder that cannot be dropped — the port is ephemeral and unknown until bind time. |
+| `{CameraPath}` | `CameraOptions.GetPath()` | Keeps the camera configured in one place. |
+| `{Framerate}` | `CameraOptions.Framerate` | Falls back to 30 when unset; `-g {Framerate}` is what gives the 1 s GOP that `GopSeconds` used to compute. |
+| `{Width}`, `{Height}` | `CameraOptions` | Used as `{Width}x{Height}`. |
+
+An unrecognised placeholder throws `InvalidOperationException` naming the offender and listing the supported set, rather than passing a literal brace to ffmpeg and surfacing as confusing stderr.
 
 ### 3. [appsettings.json](src/ScarletRadioControl.Device/appsettings.json) — replace the `Ffmpeg` section
+
+The command that will actually be invoked is visible here, which is the point of the template: tuning bitrate, GOP, preset or even the input format is a config edit, not a code change.
 
 ```json
 "Ffmpeg": {
 	"ExecutablePath": "ffmpeg",
-	"BitrateKbps": 2000,
-	"GopSeconds": 1,
-	"RtpPort": 0
+	"LinuxArguments": "-hide_banner -nostats -loglevel warning -fflags nobuffer -f v4l2 -input_format mjpeg -video_size {Width}x{Height} -framerate {Framerate} -i {CameraPath} -an -c:v h264_v4l2m2m -pix_fmt yuv420p -profile:v 66 -b:v 2000k -g {Framerate} -keyint_min {Framerate} -f rtp -payload_type 96 rtp://127.0.0.1:{RtpPort}?pkt_size=1200",
+	"RtpPort": 0,
+	"WindowsArguments": "-hide_banner -nostats -loglevel warning -fflags nobuffer -f dshow -rtbufsize 64M -video_size {Width}x{Height} -framerate {Framerate} -vcodec mjpeg -i {CameraPath} -an -c:v libx264 -pix_fmt yuv420p -profile:v baseline -preset ultrafast -tune zerolatency -sc_threshold 0 -x264-params repeat-headers=1 -b:v 2000k -maxrate 2000k -bufsize 1000k -g {Framerate} -keyint_min {Framerate} -f rtp -payload_type 96 rtp://127.0.0.1:{RtpPort}?pkt_size=1200"
 }
 ```
+
+`-payload_type 96` must stay in step with the `RtpPayloadType` constant the receive loop filters on (see section 4); it is the only value in the template that code also knows about.
 
 [appsettings.Development.json](src/ScarletRadioControl.Device/appsettings.Development.json) needs **no change** (it has no `Ffmpeg` section, and `HubUrl` is already `https://localhost:7001/hubs/web-rtc-hub` — .NET clients on the dev machine cannot resolve `*.dev.localhost`). Stale `Device__Ffmpeg__LibraryPath`/`LogLevel` env overrides on a deployed Pi bind to nothing and are harmless.
 
@@ -120,9 +136,9 @@ Verified APIs: `public static bool TryParse(ReadOnlySpan<byte> buffer, out RTPPa
 
 **`DisposeAsync`** — same as the 1→0 stop path.
 
-### 5. ffmpeg argument lists (exact, assembled via `ArgumentList`)
+### 5. ffmpeg argument lists (the configured defaults, expanded)
 
-Common prefix: `-hide_banner -nostats -loglevel warning`.
+These are the command lines the section 3 templates expand to at 1280x720@30 — not something code assembles. Code's only jobs are to split the template, substitute the placeholders, and hand the tokens to `ProcessStartInfo.ArgumentList`. Common prefix: `-hide_banner -nostats -loglevel warning`.
 
 **Windows dev** — C920 via dshow, MJPEG input (the C920 tops out at 10 fps for raw yuyv at 720p; 720p30 is MJPEG-only):
 
@@ -135,21 +151,21 @@ ffmpeg -hide_banner -nostats -loglevel warning
   -f rtp -payload_type 96 "rtp://127.0.0.1:<port>?pkt_size=1200"
 ```
 
-The `-i` value is exactly `CameraOptions.WindowsPath` (already `video=`-prefixed; `ArgumentList` avoids quoting issues). `-pix_fmt yuv420p` is load-bearing: C920 MJPEG decodes to yuvj422p and libx264 would otherwise emit 4:2:2 High, which browsers reject. `-tune zerolatency` disables B-frames, lookahead, and frame-threading delay; the tight `-bufsize` (0.5 s VBV) caps IDR size spikes so no single frame stalls the WebRTC leg — trade VBV size against quality if 2000k starts breathing visibly.
+The `-i` value is exactly `CameraOptions.WindowsPath` (already `video=`-prefixed), substituted into the `{CameraPath}` token so its spaces need no quoting. `-pix_fmt yuv420p` is load-bearing: C920 MJPEG decodes to yuvj422p and libx264 would otherwise emit 4:2:2 High, which browsers reject. `-tune zerolatency` disables B-frames, lookahead, and frame-threading delay; the tight `-bufsize` (0.5 s VBV) caps IDR size spikes so no single frame stalls the WebRTC leg — trade VBV size against quality if 2000k starts breathing visibly.
 
 **Linux / Pi 4** — v4l2 with hardware encode:
 
 ```
 ffmpeg -hide_banner -nostats -loglevel warning
   -fflags nobuffer -f v4l2 -input_format mjpeg -video_size 1280x720 -framerate 30 -i /dev/video0
-  -an -c:v h264_v4l2m2m -pix_fmt yuv420p -profile:v baseline
+  -an -c:v h264_v4l2m2m -pix_fmt yuv420p -profile:v 66
   -b:v 2000k -g 30 -keyint_min 30
   -f rtp -payload_type 96 "rtp://127.0.0.1:<port>?pkt_size=1200"
 ```
 
-`-input_format mjpeg` is needed for 720p30 over UVC bandwidth; MJPEG decode is cheap on the Pi 4. Verified against `v4l2_m2m_enc.c`: `-b:v` → the `BITRATE` ctrl, `-g` → `GOP_SIZE`, `-profile:v` mapped with a non-fatal warning if unsupported. `pkt_size=1200` keeps every datagram below MTU (no IP fragmentation).
+`-input_format mjpeg` is needed for 720p30 over UVC bandwidth; MJPEG decode is cheap on the Pi 4. Verified against `v4l2_m2m_enc.c`: `-b:v` → the `BITRATE` ctrl, `-g` → `GOP_SIZE`. **`-profile:v` must be the numeric `profile_idc` (`66` = baseline), not a name**: only libx264 registers the named profile strings, so `-profile:v baseline` is a fatal argument-parse error on `h264_v4l2m2m` rather than the non-fatal warning assumed during planning. `pkt_size=1200` keeps every datagram below MTU (no IP fragmentation).
 
-Assembly order in code: the input block per `OperatingSystem.IsWindows()` → `-an -c:v {GetEncoder()} -pix_fmt yuv420p -profile:v baseline` → libx264-only extras when the encoder is `libx264` → bitrate/GOP (`-g` = `Framerate * GopSeconds`) → `ExtraArgs` → the `-f rtp` output.
+Because each platform has its own template, the per-encoder branching that code used to do — named `baseline` and the x264-only `-preset`/`-tune`/`-sc_threshold`/`-x264-params`/`-maxrate`/`-bufsize` on Windows, numeric `66` on Linux — is simply the difference between the two strings above. `BuildFfmpegArguments` is now platform-agnostic.
 
 ### 6. Explicitly untouched
 
@@ -157,26 +173,31 @@ Assembly order in code: the input block per `OperatingSystem.IsWindows()` → `-
 
 ## Verification
 
-**Windows dev machine:**
+**Windows dev machine — not yet run** (needs the C920 on a Windows host plus a browser):
 
 1. ffmpeg CLI: winget's `Gyan.FFmpeg.Shared` is now **9.0.1** (the 8.1.2 build was removed by the upgrade) and its `bin` directory is on the user PATH — fresh terminals resolve `ffmpeg`; any 6.x+ works. If the spawned process cannot resolve it, set `Device:Ffmpeg:ExecutablePath` to the full path.
 2. Plug in the C920 (it was unplugged when checked during planning) and confirm the dshow name: `ffmpeg -list_devices true -f dshow -i dummy` must show `HD Pro Webcam C920`, matching `appsettings.Development.json`.
 3. Standalone smoke test without the app: run the Windows command above with a fixed port (e.g. 5600) plus `-sdp_file test.sdp`, then `ffplay -protocol_whitelist file,udp,rtp -i test.sdp` → live video (1–2 s of ffplay buffering is normal and is ffplay's, not the pipeline's).
 4. `dotnet build` (TreatWarningsAsErrors + style enforcement catch convention slips). Run `ScarletRadioControl.Web`, browse `https://web.scarlet-radio-control.dev.localhost:7001/device/test/control`, then run the Device app → expect the spawn log with the full args, the SDP on stdout at Debug, and live video ~1 s after `connected`. Then check: reload the client page (session replaced); close the tab → last consumer removed → ffmpeg disappears from Task Manager; kill `ffmpeg.exe` mid-stream → respawn within ~1 s and video resumes; `chrome://webrtc-internals` shows H264 with sane framesReceived and PLI counts.
 
-**Raspberry Pi 4:**
+**Raspberry Pi 4 — done:**
 
-1. `sudo apt install ffmpeg v4l-utils`; `ffmpeg -encoders | grep v4l2m2m`; `v4l2-ctl --list-formats-ext -d /dev/video0` (confirm MJPG 1280x720@30).
-2. Run the Linux command manually with a fixed port; `sudo tcpdump -i lo udp port 5600 -c 10` to confirm packets flow.
-3. Deploy the portable publish, `DOTNET_ENVIRONMENT=Production`, browse the prod control page; check CPU with `top` (expect a fraction of a core, versus x264 today).
-4. If late joiners show black video despite the app-side SPS/PPS injection, the driver-level fallback is `v4l2-ctl -d /dev/video11 --set-ctrl=repeat_sequence_header=1`.
+1. ✅ apt ffmpeg is **7.1.5** and registers `h264_v4l2m2m`; `/dev/video0` is the `HD Pro Webcam C920` and offers `MJPG` at both 1280x720 and 1920x1080.
+2. ✅ The exact Linux argument list the app builds was run against a fixed port with a loopback listener in place. Over a ~6 s capture: **1597 packets, all payload type 96, largest datagram 1200 bytes** (so nothing is IP-fragmented), **183 marker bits ≈ 30 fps**, **7 IDRs ≈ one per 30 frames**, matching `-g 30`, and **zero sequence-number gaps**. `-profile:v 66` is accepted; ffmpeg's only stderr output is the benign swscaler range warning.
+3. ✅ SPS **and** PPS appear in-band on **every one of the 183 frames** — bcm2835-codec does repeat the sequence header, which was the open question in Risks. Decision 4's app-side cache is therefore belt-and-suspenders on this platform, and the `repeat_sequence_header` driver fallback below is not needed.
+4. ✅ CPU during steady-state encode is **0.65 of one core out of four** (~16 % of the machine), and that is dominated by the *software MJPEG decode*, not the hardware H264 encode.
+5. ✅ The Device app starts with no native-library dependency at all, connects to the signalling hub, and spawns **no** ffmpeg process while no consumer is attached — the 0→1 half of the close-on-idle contract.
+6. ✅ The configured templates expand correctly through the real code path: the Linux one is byte-identical to the command measured above, and the Windows one keeps `video=HD Pro Webcam C920` as a **single** argument — substitution happens after the split, so spaces never need quoting. Framerate falls back to 30 when unset, and an unknown placeholder throws a message naming it and listing the supported set.
+7. Still open: a real browser peer against the deployed control page, which exercises fan-out, the 1→0 teardown, and respawn-after-kill.
+
+If late joiners ever do show black video despite the app-side SPS/PPS injection, the driver-level fallback is `v4l2-ctl -d /dev/video11 --set-ctrl=repeat_sequence_header=1`.
 
 ## Risks / notes
 
-- **`h264_v4l2m2m` quirks (Pi 4)**: loose bitrate control, profile warnings (non-fatal), no on-demand keyframes. Unverified until on-device testing: whether bcm2835-codec emits SPS/PPS in-band at least once — expected, and the app-side cache needs them only once. Fallback: `"LinuxEncoder": "libx264"` at reduced resolution.
+- **`h264_v4l2m2m` quirks (Pi 4)**: loose bitrate control and no on-demand keyframes remain. Two planning assumptions were wrong in opposite directions, both now settled on-device: the profile option is **fatal** on a name rather than warning (hence the numeric `66`), while SPS/PPS turned out to be repeated in-band on **every** frame, not merely once — so the app-side cache never has to fire here. Fallback if the hardware encoder ever misbehaves: `"LinuxEncoder": "libx264"` at reduced resolution.
 - **Keyframe-on-PLI is lost** (the bindings honored it): packet-loss corruption on the WebRTC leg now persists up to the GOP length (1 s). Accepted.
 - **Loopback UDP loss under load**: mitigated by the 2 MB `SO_RCVBUF` and `pkt_size=1200`; a lost marker packet costs one frame (the depacketiser discards partial access units on timestamp change). Optional: a Debug log on sequence gaps.
 - **Fan-out is synchronous** on the receive loop (each peer's `SendVideo` does SRTP inline) — fine for the modeled few-peers scenario.
-- **Input is pinned to MJPEG** on both platforms; a camera lacking MJPEG at the configured mode fails visibly in the stderr log. `ExtraArgs` cannot change input-side args, so that would need a code tweak — accepted for one known camera per platform.
+- **Input defaults to MJPEG** on both platforms; a camera lacking MJPEG at the configured mode fails visibly in the stderr log. Since the whole command including the input block is configuration, switching to `yuyv422` or another resolution is now an `appsettings` edit rather than a code change.
 - **End-to-end latency budget** (what actually dominates): camera capture ≤ 1 frame (33 ms) + MJPEG decode + encode (x264 zerolatency has no lookahead; `h264_v4l2m2m` carries ~1–2 frames of inherent hardware pipeline) + loopback/depacketize/repacketize < 1 ms + network + **the browser's adaptive jitter buffer, typically 30–100 ms and the dominant receiver-side term**. Optional frontend follow-up, out of scope here: set `jitterBufferTarget = 0` (with `playoutDelayHint = 0` as the legacy fallback) on the video `RTCRtpReceiver` in [Control.tsx](src/ScarletRadioControl.Web.Frontend/src/pages/device/Control.tsx).
 - Optional follow-up (not in this change): restore `docs/webrtc-signaling.md` from commit `624cce1` and update it with the real device implementation.
