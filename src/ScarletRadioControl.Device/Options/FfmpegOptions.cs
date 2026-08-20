@@ -1,28 +1,21 @@
 using System;
-using System.Collections.Generic;
 
 namespace ScarletRadioControl.Device.Options;
 
 public class FfmpegOptions
 {
 
-	public int BitrateKbps { get; set; } = 2000;
-
 	public string ExecutablePath { get; set; } = "ffmpeg";
 
-	public ICollection<string> ExtraArgs { get; set; } = new List<string>();
-
-	public int GopSeconds { get; set; } = 1;
-
-	public string LinuxEncoder { get; set; } = "h264_v4l2m2m";
+	public string LinuxArguments { get; set; }
 
 	public int RtpPort { get; set; }
 
-	public string WindowsEncoder { get; set; } = "libx264";
+	public string WindowsArguments { get; set; }
 
-	public string GetEncoder()
+	public string GetArguments()
 	{
-		return OperatingSystem.IsWindows() ? this.WindowsEncoder : this.LinuxEncoder;
+		return OperatingSystem.IsWindows() ? this.WindowsArguments : this.LinuxArguments;
 	}
 
 }
