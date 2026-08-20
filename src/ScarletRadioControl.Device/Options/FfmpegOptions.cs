@@ -5,7 +5,7 @@ namespace ScarletRadioControl.Device.Options;
 public class FfmpegOptions
 {
 
-	public string ExecutablePath { get; set; } = "ffmpeg";
+	public string ExecutablePath { get; set; }
 
 	public string LinuxArguments { get; set; }
 
