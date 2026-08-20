@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ScarletRadioControl.Device.Options;
@@ -13,6 +15,14 @@ public static class Startup
 			.Configure<DeviceOptions>(hostBuilderContext.Configuration.GetSection(DeviceOptions.SectionName));
 		serviceCollection
 			.AddHostedService<BackgroundServices.WebRtcSignalingBackgroundService>();
+		serviceCollection
+			.AddSingleton<HubConnection>(serviceProvider =>
+			{
+				return new HubConnectionBuilder()
+					.WithUrl(hostBuilderContext.Configuration.GetConnectionString(nameof(HubConnection)))
+					.WithAutomaticReconnect()
+					.Build();
+			});
 		serviceCollection
 			.AddSingleton<Services.CameraVideoSource>();
 		serviceCollection
