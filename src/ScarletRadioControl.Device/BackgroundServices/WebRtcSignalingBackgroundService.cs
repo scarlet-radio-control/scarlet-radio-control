@@ -14,33 +14,29 @@ namespace ScarletRadioControl.Device.BackgroundServices;
 
 public class WebRtcSignalingBackgroundService(
 	IOptions<DeviceOptions> deviceOptions,
+	HubConnection hubConnection,
 	ILogger<WebRtcSignalingBackgroundService> logger,
 	WebRtcSessionManager webRtcSessionManager
 ) : BackgroundService
 {
 
 	private readonly IOptions<DeviceOptions> deviceOptions = deviceOptions;
+	private readonly HubConnection hubConnection = hubConnection;
 	private readonly ILogger<WebRtcSignalingBackgroundService> logger = logger;
 	private readonly WebRtcSessionManager webRtcSessionManager = webRtcSessionManager;
 
-	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+	protected override async Task ExecuteAsync(CancellationToken cancellationToken)
 	{
 		var deviceOptionsValue = this.deviceOptions.Value;
 		var deviceId = deviceOptionsValue.DeviceId;
-		var hubUrl = deviceOptionsValue.HubUrl;
 
-		var hubConnection = new HubConnectionBuilder()
-			.WithUrl(hubUrl)
-			.WithAutomaticReconnect()
-			.Build();
-
-		hubConnection.On<string>("ClientJoined", async clientConnectionId =>
+		this.hubConnection.On<string>("ClientJoined", async clientConnectionId =>
 		{
 			this.logger.LogInformation("Client {ClientConnectionId} joined", clientConnectionId);
 			try
 			{
 				var rtcSessionDescriptionInit = await this.webRtcSessionManager.CreateOfferAsync(clientConnectionId);
-				await hubConnection.InvokeAsync("SendOffer", deviceId, clientConnectionId, rtcSessionDescriptionInit, stoppingToken);
+				await this.hubConnection.InvokeAsync("SendOffer", deviceId, clientConnectionId, rtcSessionDescriptionInit, cancellationToken);
 			}
 			catch (Exception exception)
 			{
@@ -48,20 +44,20 @@ public class WebRtcSignalingBackgroundService(
 			}
 		});
 
-		hubConnection.On<string, RtcSessionDescriptionInit>("ReceiveAnswer", (clientConnectionId, rtcSessionDescriptionInit) => this.webRtcSessionManager.ApplyAnswer(clientConnectionId, rtcSessionDescriptionInit));
+		this.hubConnection.On<string, RtcSessionDescriptionInit>("ReceiveAnswer", (clientConnectionId, rtcSessionDescriptionInit) => this.webRtcSessionManager.ApplyAnswer(clientConnectionId, rtcSessionDescriptionInit));
 
-		hubConnection.On<string, RtcIceCandidateInit>("ReceiveIceCandidate", (clientConnectionId, rtcIceCandidateInit) => this.webRtcSessionManager.AddIceCandidate(clientConnectionId, rtcIceCandidateInit));
+		this.hubConnection.On<string, RtcIceCandidateInit>("ReceiveIceCandidate", (clientConnectionId, rtcIceCandidateInit) => this.webRtcSessionManager.AddIceCandidate(clientConnectionId, rtcIceCandidateInit));
 
 		this.webRtcSessionManager.OnIceCandidate += async (clientConnectionId, rtcIceCandidateInit) =>
 		{
-			if (hubConnection.State != HubConnectionState.Connected)
+			if (this.hubConnection.State != HubConnectionState.Connected)
 			{
 				return;
 			}
 
 			try
 			{
-				await hubConnection.InvokeAsync("SendIceCandidate", deviceId, clientConnectionId, rtcIceCandidateInit, stoppingToken);
+				await this.hubConnection.InvokeAsync("SendIceCandidate", deviceId, clientConnectionId, rtcIceCandidateInit, cancellationToken);
 			}
 			catch (Exception exception)
 			{
@@ -71,12 +67,12 @@ public class WebRtcSignalingBackgroundService(
 
 		// Reconnecting yields a new hub connection id, so the group membership is lost and must be re-established.
 		// Established peers keep streaming, the media is peer to peer.
-		hubConnection.Reconnected += async _ =>
+		this.hubConnection.Reconnected += async _ =>
 		{
-			this.logger.LogInformation("Reconnected to hub {HubUrl}, rejoining as device {DeviceId}", hubUrl, deviceId);
+			this.logger.LogInformation("Reconnected to hub {HubConnection}, rejoining as device {DeviceId}", this.hubConnection.ConnectionId, deviceId);
 			try
 			{
-				var rtcIceServers = await hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, stoppingToken);
+				var rtcIceServers = await this.hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, cancellationToken);
 				this.webRtcSessionManager.SetIceServers(rtcIceServers);
 			}
 			catch (Exception exception)
@@ -89,18 +85,18 @@ public class WebRtcSignalingBackgroundService(
 		{
 			var disconnectedTickCount = 0;
 			using var periodicTimer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-			while (await periodicTimer.WaitForNextTickAsync(stoppingToken))
+			while (await periodicTimer.WaitForNextTickAsync(cancellationToken))
 			{
-				if (hubConnection.State == HubConnectionState.Disconnected)
+				if (this.hubConnection.State == HubConnectionState.Disconnected)
 				{
 					if (disconnectedTickCount % 5 == 0)
 					{
 						try
 						{
-							await hubConnection.StartAsync(stoppingToken);
-							var rtcIceServers = await hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, stoppingToken);
+							await this.hubConnection.StartAsync(cancellationToken);
+							var rtcIceServers = await this.hubConnection.InvokeAsync<ICollection<RtcIceServer>>("JoinAsDevice", deviceId, null, cancellationToken);
 							this.webRtcSessionManager.SetIceServers(rtcIceServers);
-							this.logger.LogInformation("Connected to hub {HubUrl} as device {DeviceId}", hubUrl, deviceId);
+							this.logger.LogInformation("Connected to hub {HubConnection} as device {DeviceId}", this.hubConnection.ConnectionId, deviceId);
 						}
 						catch (OperationCanceledException)
 						{
@@ -108,7 +104,7 @@ public class WebRtcSignalingBackgroundService(
 						}
 						catch (Exception exception)
 						{
-							this.logger.LogWarning(exception, "Failed to connect to hub {HubUrl}", hubUrl);
+							this.logger.LogWarning(exception, "Failed to connect to hub {HubConnection}", this.hubConnection.ConnectionId);
 						}
 					}
 					disconnectedTickCount++;
@@ -117,11 +113,11 @@ public class WebRtcSignalingBackgroundService(
 
 				disconnectedTickCount = 0;
 
-				if (hubConnection.State == HubConnectionState.Connected)
+				if (this.hubConnection.State == HubConnectionState.Connected)
 				{
 					try
 					{
-						await hubConnection.InvokeAsync("DeviceHeartbeat", deviceId, stoppingToken);
+						await this.hubConnection.InvokeAsync("DeviceHeartbeat", deviceId, cancellationToken);
 					}
 					catch (OperationCanceledException)
 					{
@@ -141,7 +137,7 @@ public class WebRtcSignalingBackgroundService(
 		finally
 		{
 			this.webRtcSessionManager.CloseAll();
-			await hubConnection.DisposeAsync();
+			await this.hubConnection.DisposeAsync();
 		}
 	}
 
