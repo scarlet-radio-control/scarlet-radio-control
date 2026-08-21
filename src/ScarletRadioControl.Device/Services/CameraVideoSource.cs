@@ -155,7 +155,7 @@ public class CameraVideoSource(
 		var cameraOptions = deviceOptionsValue.Camera;
 
 		// Bind before spawning so the ephemeral port is known, and so no packet is missed once ffmpeg starts sending.
-		var udpClient = new UdpClient(new IPEndPoint(IPAddress.Loopback, deviceOptionsValue.Ffmpeg.RtpPort));
+		var udpClient = new UdpClient(new IPEndPoint(IPAddress.IPv6Loopback, deviceOptionsValue.Ffmpeg.RtpPort));
 		CameraCapture cameraCapture;
 		try
 		{
