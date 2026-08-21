@@ -5,7 +5,11 @@ namespace ScarletRadioControl.Device.Options;
 public class FfmpegOptions
 {
 
+	public int BitrateKilobitsPerSecond { get; set; }
+
 	public string ExecutablePath { get; set; }
+
+	public int KeyframeIntervalSeconds { get; set; }
 
 	public string LinuxArguments { get; set; }
 
