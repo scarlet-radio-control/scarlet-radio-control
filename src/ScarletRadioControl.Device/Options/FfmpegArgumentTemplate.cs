@@ -12,15 +12,33 @@ namespace ScarletRadioControl.Device.Options;
 public static partial class FfmpegArgumentTemplate
 {
 
+	// A quarter second of video at the configured bitrate. The buffer is deliberately small: a larger one
+	// lets the encoder answer a busy scene with a burst, and on a cellular uplink that burst sits in the
+	// modem's queue as latency that never comes back. Derived rather than configured so raising the bitrate
+	// cannot silently leave a buffer sized for the old one.
+	private const int BufferSizeDivisor = 4;
+
+	private const int DefaultBitrateKilobitsPerSecond = 1500;
+
 	private const int DefaultFramerate = 30;
+
+	// Two seconds between keyframes. Nothing here answers a picture loss indication, so this interval is
+	// also the worst case a viewer waits for its first picture and for recovery after packet loss.
+	private const int DefaultKeyframeIntervalSeconds = 2;
 
 	public static List<string> Expand(CameraOptions cameraOptions, FfmpegOptions ffmpegOptions, int rtpPort, int payloadType)
 	{
 		var framerate = cameraOptions.Framerate > 0 ? cameraOptions.Framerate : DefaultFramerate;
+		var bitrateKilobitsPerSecond = ffmpegOptions.BitrateKilobitsPerSecond > 0 ? ffmpegOptions.BitrateKilobitsPerSecond : DefaultBitrateKilobitsPerSecond;
+		var keyframeIntervalSeconds = ffmpegOptions.KeyframeIntervalSeconds > 0 ? ffmpegOptions.KeyframeIntervalSeconds : DefaultKeyframeIntervalSeconds;
 		var placeholderValues = new Dictionary<string, string>
 		{
+			["Bitrate"] = $"{bitrateKilobitsPerSecond}k",
+			["BufferSize"] = $"{bitrateKilobitsPerSecond / BufferSizeDivisor}k",
 			["CameraPath"] = cameraOptions.GetPath(),
 			["Framerate"] = $"{framerate}",
+			// Expressed in frames because that is the only unit -g understands.
+			["GopFrames"] = $"{framerate * keyframeIntervalSeconds}",
 			["Height"] = $"{cameraOptions.Height}",
 			["PayloadType"] = $"{payloadType}",
 			["RtpPort"] = $"{rtpPort}",
