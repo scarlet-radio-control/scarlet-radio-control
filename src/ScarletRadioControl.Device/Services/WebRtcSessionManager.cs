@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ScarletRadioControl.Device.Signaling;
@@ -29,11 +30,11 @@ public class WebRtcSessionManager(
 
 	public event Action<string, RtcIceCandidateInit>? OnIceCandidate;
 
-	public void SetIceServers(ICollection<RtcIceServer>? rtcIceServers)
+	public void SetIceServers(ICollection<WebRtcSignalingClient.RtcIceServer>? rtcIceServers)
 	{
 		var mappedRtcIceServers = new List<RTCIceServer>();
 
-		foreach (var rtcIceServer in rtcIceServers ?? new List<RtcIceServer>())
+		foreach (var rtcIceServer in rtcIceServers ?? new List<WebRtcSignalingClient.RtcIceServer>())
 		{
 			foreach (var url in rtcIceServer.Urls ?? new List<string>())
 			{
@@ -68,7 +69,7 @@ public class WebRtcSessionManager(
 		this.logger.LogInformation("Configured {IceServerCount} ice servers", mappedRtcIceServers.Count);
 	}
 
-	public async Task<RtcSessionDescriptionInit> CreateOfferAsync(string clientConnectionId)
+	public async Task<WebRtcSignalingClient.RtcSessionDescriptionInit> CreateOfferAsync(string clientConnectionId)
 	{
 		this.ClosePeer(clientConnectionId);
 
@@ -80,14 +81,19 @@ public class WebRtcSessionManager(
 		// The identical negotiated data channel set as useRtcPeerConnection.tsx; unused for now.
 		var rtcDataChannels = new[]
 		{
-			await rtcPeerConnection.createDataChannel("control", new RTCDataChannelInit { id = 0, maxRetransmits = 0, negotiated = true, ordered = false }),
-			await rtcPeerConnection.createDataChannel("commands", new RTCDataChannelInit { id = 1, negotiated = true }),
-			await rtcPeerConnection.createDataChannel("telemetry", new RTCDataChannelInit { id = 2, maxRetransmits = 0, negotiated = true, ordered = false }),
-			await rtcPeerConnection.createDataChannel("events", new RTCDataChannelInit { id = 3, negotiated = true }),
+			await rtcPeerConnection.createDataChannel("control", new RTCDataChannelInit { id = 0, maxRetransmits = 0, negotiated = true, ordered = false, }),
+			await rtcPeerConnection.createDataChannel("commands", new RTCDataChannelInit { id = 1, negotiated = true, }),
+			await rtcPeerConnection.createDataChannel("telemetry", new RTCDataChannelInit { id = 2, maxRetransmits = 0, negotiated = true, ordered = false, }),
+			await rtcPeerConnection.createDataChannel("events", new RTCDataChannelInit { id = 3, negotiated = true, }),
 		};
 		foreach (var rtcDataChannel in rtcDataChannels)
 		{
 			rtcDataChannel.onopen += () => this.logger.LogDebug("Data channel {Label} opened for client {ClientConnectionId}", rtcDataChannel.label, clientConnectionId);
+			rtcDataChannel.onmessage += (rtcDataChannel, dataChannelPayloadProtocols, bytes) =>
+			{
+				var message = Encoding.UTF8.GetString(bytes);
+				this.logger.LogDebug($"Data channel {rtcDataChannel.label} received a message: {message}");
+			};
 		}
 
 		rtcPeerConnection.addTrack(new MediaStreamTrack(this.cameraVideoSource.GetVideoSourceFormats(), MediaStreamStatusEnum.SendOnly));
@@ -134,10 +140,10 @@ public class WebRtcSessionManager(
 		await rtcPeerConnection.setLocalDescription(rtcSessionDescriptionInit);
 
 		this.logger.LogInformation("Created offer for client {ClientConnectionId}", clientConnectionId);
-		return new RtcSessionDescriptionInit { Sdp = rtcSessionDescriptionInit.sdp, Type = "offer" };
+		return new WebRtcSignalingClient.RtcSessionDescriptionInit { Sdp = rtcSessionDescriptionInit.sdp, Type = "offer" };
 	}
 
-	public void ApplyAnswer(string clientConnectionId, RtcSessionDescriptionInit rtcSessionDescriptionInit)
+	public void ApplyAnswer(string clientConnectionId, WebRtcSignalingClient.RtcSessionDescriptionInit rtcSessionDescriptionInit)
 	{
 		if (!this.webRtcPeerSessions.TryGetValue(clientConnectionId, out var webRtcPeerSession))
 		{
@@ -255,7 +261,6 @@ public class WebRtcSessionManager(
 			}
 
 			await this.cameraVideoSource.AddConsumerAsync(encodedSampleDelegate);
-			this.cameraVideoSource.ForceKeyFrame();
 		}
 		catch (Exception exception)
 		{

@@ -11,6 +11,4 @@ public class DeviceOptions
 
 	public FfmpegOptions Ffmpeg { get; set; } = new FfmpegOptions();
 
-	public string HubUrl { get; set; }
-
 }

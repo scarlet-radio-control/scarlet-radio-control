@@ -1,20 +1,25 @@
 using System;
-using SIPSorceryMedia.FFmpeg;
 
 namespace ScarletRadioControl.Device.Options;
 
 public class FfmpegOptions
 {
 
-	public string? LinuxLibraryPath { get; set; }
+	public int BitrateKilobitsPerSecond { get; set; }
 
-	public FfmpegLogLevelEnum LogLevel { get; set; } = FfmpegLogLevelEnum.AV_LOG_WARNING;
+	public string ExecutablePath { get; set; }
 
-	public string? WindowsLibraryPath { get; set; }
+	public int KeyframeIntervalSeconds { get; set; }
 
-	public string? GetLibraryPath()
+	public string LinuxArguments { get; set; }
+
+	public int RtpPort { get; set; }
+
+	public string WindowsArguments { get; set; }
+
+	public string GetArguments()
 	{
-		return OperatingSystem.IsWindows() ? this.WindowsLibraryPath : this.LinuxLibraryPath;
+		return OperatingSystem.IsWindows() ? this.WindowsArguments : this.LinuxArguments;
 	}
 
 }
