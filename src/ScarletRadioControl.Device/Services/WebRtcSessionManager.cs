@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ScarletRadioControl.Device.Signaling;
@@ -80,14 +81,19 @@ public class WebRtcSessionManager(
 		// The identical negotiated data channel set as useRtcPeerConnection.tsx; unused for now.
 		var rtcDataChannels = new[]
 		{
-			await rtcPeerConnection.createDataChannel("control", new RTCDataChannelInit { id = 0, maxRetransmits = 0, negotiated = true, ordered = false }),
-			await rtcPeerConnection.createDataChannel("commands", new RTCDataChannelInit { id = 1, negotiated = true }),
-			await rtcPeerConnection.createDataChannel("telemetry", new RTCDataChannelInit { id = 2, maxRetransmits = 0, negotiated = true, ordered = false }),
-			await rtcPeerConnection.createDataChannel("events", new RTCDataChannelInit { id = 3, negotiated = true }),
+			await rtcPeerConnection.createDataChannel("control", new RTCDataChannelInit { id = 0, maxRetransmits = 0, negotiated = true, ordered = false, }),
+			await rtcPeerConnection.createDataChannel("commands", new RTCDataChannelInit { id = 1, negotiated = true, }),
+			await rtcPeerConnection.createDataChannel("telemetry", new RTCDataChannelInit { id = 2, maxRetransmits = 0, negotiated = true, ordered = false, }),
+			await rtcPeerConnection.createDataChannel("events", new RTCDataChannelInit { id = 3, negotiated = true, }),
 		};
 		foreach (var rtcDataChannel in rtcDataChannels)
 		{
 			rtcDataChannel.onopen += () => this.logger.LogDebug("Data channel {Label} opened for client {ClientConnectionId}", rtcDataChannel.label, clientConnectionId);
+			rtcDataChannel.onmessage += (rtcDataChannel, dataChannelPayloadProtocols, bytes) =>
+			{
+				var message = Encoding.UTF8.GetString(bytes);
+				this.logger.LogDebug($"Data channel {rtcDataChannel.label} received a message: {message}");
+			};
 		}
 
 		rtcPeerConnection.addTrack(new MediaStreamTrack(this.cameraVideoSource.GetVideoSourceFormats(), MediaStreamStatusEnum.SendOnly));
