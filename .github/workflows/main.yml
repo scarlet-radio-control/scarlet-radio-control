@@ -1,3 +1,4 @@
+$schema: "https://json.schemastore.org/github-workflow.json"
 jobs:
   build:
     runs-on: "ubuntu-26.04"
