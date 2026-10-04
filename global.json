@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/global",
   "msbuild-sdks": {
-    "Microsoft.VisualStudio.JavaScript.Sdk": "1.0.6578810"
+    "Microsoft.VisualStudio.JavaScript.Sdk": "1.0.6887863"
   },
   "sdk": {
     "rollForward": "latestMajor",
